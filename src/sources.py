@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from pptx import Presentation
+from pypdf import PdfReader
 
 SourceKind = Literal["pptx", "pdf", "text", "topic"]
 
@@ -74,6 +75,15 @@ def load_pptx(data: bytes, name: str) -> Source:
         body = "\n".join(lines) if lines else "(ไม่มีข้อความ)"
         parts.append(f"[สไลด์ {number}]\n{body}")
     return Source(kind="pptx", name=name, text="\n\n".join(parts))
+
+
+def pdf_to_text(data: bytes) -> str:
+    """ใช้กับโมเดลที่อ่าน PDF เองไม่ได้ (เช่น Ollama) — ได้เฉพาะข้อความ ไม่เห็นรูป/ตาราง"""
+    pages = []
+    for number, page in enumerate(PdfReader(io.BytesIO(data)).pages, start=1):
+        text = (page.extract_text() or "").strip()
+        pages.append(f"[หน้า {number}]\n{text or '(ไม่มีข้อความ)'}")
+    return "\n\n".join(pages)
 
 
 def load_pdf(data: bytes, name: str) -> Source:

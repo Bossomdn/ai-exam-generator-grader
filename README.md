@@ -11,12 +11,18 @@
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
-
-copy .env.example .env      # แล้วใส่ ANTHROPIC_API_KEY จาก https://console.anthropic.com
+copy .env.example .env
 streamlit run app.py
 ```
 
-ทดสอบ (ไม่ต้องใช้ API key): `python -m pytest`
+เลือกโมเดลได้ 2 แบบด้วย `LLM_PROVIDER` ในไฟล์ `.env`
+
+| ค่า | ใช้อะไร | ค่าใช้จ่าย | ต้องเตรียม |
+|---|---|---|---|
+| `ollama` (ค่าเริ่มต้น) | `gemma4:12b` รันในเครื่อง | ฟรี | ติดตั้ง [Ollama](https://ollama.com/download) แล้วรัน `ollama pull gemma4:12b` (~8GB, ควรมี GPU 8GB+) |
+| `claude` | `claude-opus-5-5` ผ่าน API | ~$0.1–0.3 ต่อรอบ | ใส่ `ANTHROPIC_API_KEY` จาก https://console.anthropic.com |
+
+ทดสอบ (ไม่ต้องใช้โมเดล): `python -m pytest`
 
 ## วิธีใช้
 
@@ -35,13 +41,14 @@ streamlit run app.py
 | ตรวจปรนัย, รวมคะแนน, คะแนนรายหัวข้อ, ตรวจหลักฐาน | `src/scoring.py` | ไม่ |
 | ตรวจอัตนัยตามเกณฑ์ พร้อมหลักฐานจากคำตอบ | `src/grader.py` | ใช่ (ทีละข้อ, ขนานกัน) |
 | วิเคราะห์จุดอ่อนและคำแนะนำ | `src/advisor.py` | ใช่ |
-| เรียก Claude + structured output + จัดการ error | `src/llm.py` | – |
+| เรียกโมเดล (Ollama / Claude) + structured output + จัดการ error | `src/llm.py` | – |
 
 แนวคิดหลัก
 - **ตัวเลขทุกตัวคำนวณด้วยโค้ด** (คะแนนปรนัย คะแนนรวม คะแนนรายหัวข้อ) LLM ใช้เฉพาะงานที่ต้องตีความ
 - grader ต้องคัดลอก **หลักฐานจากคำตอบ** มาประกอบคะแนน โค้ดตรวจว่ามีอยู่จริง ถ้าไม่พบจะเตือนให้ผู้สอนตรวจซ้ำ
 - คำตอบนักเรียนถูกห่อด้วย `<student_answer>` และสั่งให้ถือเป็นข้อมูล (กัน prompt injection)
-- ใช้ `claude-opus-5-5` ผ่าน structured output (Pydantic) และเปิด server-side fallback เมื่อโมเดลปฏิเสธคำขอ
+- ทุก agent ได้ผลลัพธ์เป็น JSON ตาม Pydantic schema (Ollama: `format=<schema>`, Claude: structured output + server-side fallback)
+- Ollama อ่าน PDF เองไม่ได้ ระบบจึงแยกข้อความจาก PDF ก่อน (เห็นเฉพาะข้อความ ไม่เห็นรูป/ตาราง)
 
 ## ขั้นต่อไป (roadmap)
 

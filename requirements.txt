@@ -1,4 +1,6 @@
 anthropic>=1.13
+ollama>=0.6
+pypdf>=5
 streamlit>=1.40
 pydantic>=2.7
 python-pptx>=1.0

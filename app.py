@@ -4,6 +4,7 @@
 """
 
 import json
+import re
 from pathlib import Path
 
 import streamlit as st
@@ -12,7 +13,7 @@ from src import config, scoring
 from src.advisor import advise
 from src.generator import generate_exam
 from src.grader import grade_exam
-from src.llm import LLMError
+from src.llm import LLMError, check_ready
 from src.schemas import OBJECTIVE_TYPES, TYPE_LABELS, Exam, Question
 from src.sources import from_topic, load_text, load_upload
 
@@ -31,13 +32,18 @@ for key, default in {
 }.items():
     state.setdefault(key, default)
 
-has_key = config.has_api_key()
+ready, ready_message = check_ready()
 
 
 def set_exam(exam: Exam) -> None:
     state.exam = exam
     state.version += 1
     state.results = state.mastery = state.report = None
+
+
+def strip_numbering(text: str) -> str:
+    """ตัดเลขลำดับที่โมเดลใส่มาเอง (เช่น "1. ") เพื่อไม่ให้ซ้ำกับเลขที่ UI ใส่"""
+    return re.sub(r"^\s*\d+[.)]\s*", "", text)
 
 
 def render_answer_key(q: Question) -> None:
@@ -65,11 +71,12 @@ def render_answer_key(q: Question) -> None:
 # ---------------- Sidebar ----------------
 with st.sidebar:
     st.header("สถานะระบบ")
-    if has_key:
-        st.success("✅ พบ API key")
+    if ready:
+        st.success(f"✅ {ready_message}")
     else:
-        st.error("ยังไม่ได้ตั้ง ANTHROPIC_API_KEY\n\nคัดลอก `.env.example` เป็น `.env` แล้วใส่ key จากนั้นรีสตาร์ตแอป")
-    st.caption(f"โมเดล: `{config.MODEL}`")
+        st.error(ready_message)
+    st.caption(f"ผู้ให้บริการ: `{config.PROVIDER}` · โมเดล: `{config.model_name()}`")
+    st.caption("เปลี่ยนได้ที่ `LLM_PROVIDER` ในไฟล์ `.env`")
     st.markdown(
         "**ขั้นตอน**\n"
         "1. ใส่เนื้อหา + สั่งว่าอยากได้ข้อสอบแบบไหน\n"
@@ -114,8 +121,8 @@ with tab_create:
 
     user_prompt = st.text_area("อยากได้ข้อสอบแนวไหน แบบไหน กี่ข้อ", value=EXAMPLE_PROMPT, height=100)
 
-    if st.button("สร้างข้อสอบ", type="primary", disabled=source is None or not has_key):
-        with st.spinner("กำลังออกข้อสอบพร้อมเฉลย... (อาจใช้เวลา 1–3 นาที)"):
+    if st.button("สร้างข้อสอบ", type="primary", disabled=source is None or not ready):
+        with st.spinner("กำลังออกข้อสอบพร้อมเฉลย... (อาจใช้เวลาหลายนาที โดยเฉพาะโมเดลในเครื่อง)"):
             try:
                 set_exam(generate_exam(source, user_prompt))
                 state.source = source
@@ -179,7 +186,7 @@ with tab_take:
                         label_visibility="collapsed",
                     )
                 st.write("")
-            submitted = st.form_submit_button("ส่งคำตอบให้ตรวจ", type="primary", disabled=not has_key)
+            submitted = st.form_submit_button("ส่งคำตอบให้ตรวจ", type="primary", disabled=not ready)
 
         if submitted:
             answers = {q.id: state.get(f"ans_{v}_{q.id}") for q in exam.questions}
@@ -234,7 +241,7 @@ with tab_result:
             with col_a:
                 st.markdown("**จุดแข็ง**\n" + "\n".join(f"- {s}" for s in report.strengths))
             with col_b:
-                st.markdown("**แผนการทบทวน**\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(report.study_plan, 1)))
+                st.markdown("**แผนการทบทวน**\n" + "\n".join(f"{i}. {strip_numbering(s)}" for i, s in enumerate(report.study_plan, 1)))
 
             st.markdown("#### เรื่องที่ต้องเรียนเพิ่ม / ปรับปรุง")
             pct_by_concept = {m.concept: m.percent for m in mastery}
@@ -254,7 +261,7 @@ with tab_result:
             practice_prompt = st.text_area(
                 "คำสั่งสำหรับแบบฝึกชุดถัดไป (แก้ได้)", value=report.practice_prompt, key=f"practice_{state.version}"
             )
-            if st.button("สร้างแบบฝึกเพิ่มเรื่องที่อ่อน", disabled=state.source is None or not has_key):
+            if st.button("สร้างแบบฝึกเพิ่มเรื่องที่อ่อน", disabled=state.source is None or not ready):
                 with st.spinner("กำลังสร้างแบบฝึกชุดใหม่..."):
                     try:
                         set_exam(generate_exam(state.source, practice_prompt))

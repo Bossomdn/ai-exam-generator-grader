@@ -67,6 +67,23 @@ def test_finalize_subjective_clips_points_and_flags_fake_evidence():
     assert result.unverified_evidence == ["precision ต่ำกว่า recall เสมอ"]
 
 
+def test_finalize_subjective_matches_criterion_names_with_extra_text():
+    q = make_question(type="short_answer", points=2, choices=[], correct_choice=None, key_points=["Bias", "Variance"])
+    grade = SubjectiveGrade(
+        criteria=[
+            # โมเดลเติมข้อความต่อท้ายชื่อเกณฑ์ และให้ max_points เกินจริง
+            CriterionScore(criterion="Bias (เต็ม 1 คะแนน)", points_awarded=5, max_points=5, evidence="", comment=""),
+            CriterionScore(criterion="อะไรสักอย่าง", points_awarded=1, max_points=1, evidence="", comment=""),
+            CriterionScore(criterion="เกณฑ์ที่ไม่มีอยู่จริง", points_awarded=9, max_points=9, evidence="", comment=""),
+        ],
+        missed_key_points=[], misconceptions=[], feedback="",
+    )
+    result = scoring.finalize_subjective(q, grade, "คำตอบ")
+    assert [c.criterion for c in result.criteria] == ["Bias", "Variance"]
+    assert [c.points_awarded for c in result.criteria] == [1, 1]
+    assert result.points_awarded == 2
+
+
 def test_quote_matching_ignores_whitespace_and_quote_marks():
     assert scoring.quote_in_answer("“ต้นทุน   สูง”", "การพลาดมีต้นทุน สูง มาก")
     assert not scoring.quote_in_answer("", "อะไรก็ได้")

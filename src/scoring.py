@@ -72,15 +72,32 @@ def unanswered_result(question: Question) -> QuestionResult:
     )
 
 
+def _match_criterion(returned: str, index: int, known: list[tuple[str, str, float]]) -> Optional[tuple[str, float]]:
+    """จับคู่ชื่อเกณฑ์ที่ grader ตอบกลับกับเกณฑ์จริง (โมเดลบางตัวเติมข้อความต่อท้ายชื่อ)"""
+    for name, _, max_pts in known:
+        if returned == name:
+            return name, max_pts
+    for name, _, max_pts in known:
+        if name in returned:
+            return name, max_pts
+    if index < len(known):  # สุดท้ายใช้ลำดับ เพราะ grader ตอบตามลำดับเกณฑ์
+        name, _, max_pts = known[index]
+        return name, max_pts
+    return None
+
+
 def finalize_subjective(question: Question, grade: SubjectiveGrade, answer: str) -> QuestionResult:
     """จำกัดคะแนนไม่ให้เกินเกณฑ์ และตรวจว่าหลักฐานที่ grader อ้างมีอยู่ในคำตอบจริง"""
-    limits = {name: max_pts for name, _, max_pts in subjective_criteria(question)}
+    known = subjective_criteria(question)
     criteria: list[CriterionScore] = []
     unverified: list[str] = []
-    for c in grade.criteria:
-        max_pts = limits.get(c.criterion, c.max_points)
+    for index, c in enumerate(grade.criteria):
+        match = _match_criterion(c.criterion, index, known)
+        if match is None:  # เกณฑ์ที่ไม่มีอยู่จริง ไม่นับคะแนน
+            continue
+        name, max_pts = match
         awarded = min(max(c.points_awarded, 0.0), max_pts)
-        criteria.append(c.model_copy(update={"points_awarded": awarded, "max_points": max_pts}))
+        criteria.append(c.model_copy(update={"criterion": name, "points_awarded": awarded, "max_points": max_pts}))
         if c.evidence.strip() and not quote_in_answer(c.evidence, answer):
             unverified.append(c.evidence)
     total = min(sum(c.points_awarded for c in criteria), question.points)
