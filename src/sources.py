@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
+import pypdfium2 as pdfium
 from pptx import Presentation
-from pypdf import PdfReader
 
 SourceKind = Literal["pptx", "pdf", "text", "topic"]
 
@@ -77,13 +77,21 @@ def load_pptx(data: bytes, name: str) -> Source:
     return Source(kind="pptx", name=name, text="\n\n".join(parts))
 
 
+def pdf_page_texts(data: bytes) -> list[str]:
+    """ข้อความรายหน้า (pdfium ดึงสระ/วรรณยุกต์ไทยได้ครบกว่า pypdf)"""
+    doc = pdfium.PdfDocument(data)
+    try:
+        return [doc[i].get_textpage().get_text_range().strip() for i in range(len(doc))]
+    finally:
+        doc.close()
+
+
 def pdf_to_text(data: bytes) -> str:
     """ใช้กับโมเดลที่อ่าน PDF เองไม่ได้ (เช่น Ollama) — ได้เฉพาะข้อความ ไม่เห็นรูป/ตาราง"""
-    pages = []
-    for number, page in enumerate(PdfReader(io.BytesIO(data)).pages, start=1):
-        text = (page.extract_text() or "").strip()
-        pages.append(f"[หน้า {number}]\n{text or '(ไม่มีข้อความ)'}")
-    return "\n\n".join(pages)
+    return "\n\n".join(
+        f"[หน้า {number}]\n{text or '(ไม่มีข้อความ)'}"
+        for number, text in enumerate(pdf_page_texts(data), start=1)
+    )
 
 
 def load_pdf(data: bytes, name: str) -> Source:

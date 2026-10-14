@@ -4,12 +4,11 @@
 """
 
 import json
-import re
 from pathlib import Path
 
 import streamlit as st
 
-from src import config, scoring
+from src import answer_reader, config, export, scoring
 from src.advisor import advise
 from src.generator import generate_exam
 from src.grader import grade_exam
@@ -29,6 +28,8 @@ state = st.session_state
 for key, default in {
     "source": None, "exam": None, "version": 0,
     "results": None, "mastery": None, "report": None, "notice": None,
+    "files": {},  # ไฟล์ PDF ที่สร้างแล้ว {"exam" | "key" | "report": bytes}
+    "sheet": None,  # กระดาษคำตอบที่อัปโหลด {"version", "file": AnswerSheetFile, "result": ExtractedAnswerSheet}
 }.items():
     state.setdefault(key, default)
 
@@ -39,11 +40,8 @@ def set_exam(exam: Exam) -> None:
     state.exam = exam
     state.version += 1
     state.results = state.mastery = state.report = None
-
-
-def strip_numbering(text: str) -> str:
-    """ตัดเลขลำดับที่โมเดลใส่มาเอง (เช่น "1. ") เพื่อไม่ให้ซ้ำกับเลขที่ UI ใส่"""
-    return re.sub(r"^\s*\d+[.)]\s*", "", text)
+    state.files = {}
+    state.sheet = None
 
 
 def render_answer_key(q: Question) -> None:
@@ -66,6 +64,47 @@ def render_answer_key(q: Question) -> None:
             ))
     st.caption(f"คำอธิบาย: {q.explanation}")
     st.divider()
+
+
+def render_answer_form(exam: Exam, v: int, upload_mode: bool, extracted_by_id: dict) -> bool:
+    """ฟอร์มตอบข้อสอบ (ใช้ตรวจทานคำตอบที่ถอดจากไฟล์ด้วย) คืน True เมื่อกดส่งตรวจ"""
+    with st.form(f"exam_form_{v}"):
+        for q in exam.questions:
+            st.markdown(f"**ข้อ {q.id}.** {q.question}")
+            st.caption(f"{TYPE_LABELS[q.type]} · {q.points:g} คะแนน")
+            key = f"ans_{v}_{q.id}"
+            if upload_mode:
+                a = extracted_by_id.get(q.id)
+                if a is None:
+                    st.warning("⚠️ ไม่พบคำตอบข้อนี้ในไฟล์ — ตรวจดูว่าผู้สอบไม่ได้ตอบ หรือระบบอ่านไม่เจอ")
+                elif a.answer and q.type in OBJECTIVE_TYPES and answer_reader.to_form_value(q, a) is None:
+                    st.warning(f"⚠️ อ่านได้ว่า “{a.answer}” แต่จับคู่กับตัวเลือกไม่ได้ กรุณาเลือกเอง")
+                elif mismatch := answer_reader.consistency_warning(q, a):
+                    st.warning(f"⚠️ {mismatch} — อาจอ่านเครื่องหมายผิด กรุณาเทียบกับภาพ")
+                elif a.confidence != "high":
+                    level = "อ่านไม่ค่อยออก" if a.confidence == "low" else "ไม่แน่ใจบางส่วน"
+                    st.warning(f"⚠️ {level}" + (f" — {a.note}" if a.note else "") + " · กรุณาตรวจทาน")
+            if q.type in OBJECTIVE_TYPES:
+                # ไม่ส่ง index ถ้ามีค่าใน session_state แล้ว (เช่น ค่าที่ถอดจากไฟล์) เพื่อไม่ให้ Streamlit เตือนค่าซ้อน
+                default = {} if key in state else {"index": None}
+                st.radio(
+                    f"คำตอบข้อ {q.id}",
+                    options=list(range(len(q.choices))),
+                    format_func=lambda i, q=q: scoring.choice_label(q, i),
+                    key=key,
+                    label_visibility="collapsed",
+                    **default,
+                )
+            else:
+                st.text_area(
+                    f"คำตอบข้อ {q.id}",
+                    key=key,
+                    height=120 if q.type == "short_answer" else 260,
+                    placeholder="พิมพ์คำตอบที่นี่",
+                    label_visibility="collapsed",
+                )
+            st.write("")
+        return st.form_submit_button("ส่งคำตอบให้ตรวจ", type="primary", disabled=not ready)
 
 
 # ---------------- Sidebar ----------------
@@ -147,8 +186,26 @@ with tab_create:
         with st.expander("ดูข้อสอบพร้อมเฉลย (สำหรับผู้สอน)"):
             for q in exam.questions:
                 render_answer_key(q)
+        st.markdown("#### พิมพ์ข้อสอบ")
+        if st.button("📄 สร้างไฟล์ PDF (ข้อสอบ + เฉลย)"):
+            with st.spinner("กำลังสร้าง PDF..."):
+                try:
+                    state.files["exam"] = export.exam_pdf(exam)
+                    state.files["key"] = export.answer_key_pdf(exam)
+                except export.ExportError as e:
+                    st.error(str(e))
+        if "exam" in state.files:
+            col_exam, col_key = st.columns(2)
+            col_exam.download_button(
+                "⬇️ ข้อสอบ (ไม่มีเฉลย) — แจกผู้สอบ", state.files["exam"],
+                file_name="exam.pdf", mime="application/pdf",
+            )
+            col_key.download_button(
+                "⬇️ เฉลย + เกณฑ์ให้คะแนน — สำหรับผู้สอน", state.files["key"],
+                file_name="answer_key.pdf", mime="application/pdf",
+            )
         st.download_button(
-            "ดาวน์โหลดข้อสอบ + เฉลย (JSON)",
+            "ดาวน์โหลดข้อมูลข้อสอบ (JSON)",
             exam.model_dump_json(indent=2),
             file_name="exam.json",
             mime="application/json",
@@ -163,42 +220,56 @@ with tab_take:
     else:
         v = state.version
         st.subheader(exam.title)
-        with st.form(f"exam_form_{v}"):
-            for q in exam.questions:
-                st.markdown(f"**ข้อ {q.id}.** {q.question}")
-                st.caption(f"{TYPE_LABELS[q.type]} · {q.points:g} คะแนน")
-                key = f"ans_{v}_{q.id}"
-                if q.type in OBJECTIVE_TYPES:
-                    st.radio(
-                        f"คำตอบข้อ {q.id}",
-                        options=list(range(len(q.choices))),
-                        format_func=lambda i, q=q: scoring.choice_label(q, i),
-                        index=None,
-                        key=key,
-                        label_visibility="collapsed",
-                    )
-                else:
-                    st.text_area(
-                        f"คำตอบข้อ {q.id}",
-                        key=key,
-                        height=120 if q.type == "short_answer" else 260,
-                        placeholder="พิมพ์คำตอบที่นี่",
-                        label_visibility="collapsed",
-                    )
-                st.write("")
-            submitted = st.form_submit_button("ส่งคำตอบให้ตรวจ", type="primary", disabled=not ready)
+        upload_mode = st.radio(
+            "วิธีส่งคำตอบ", ["ตอบในแอป", "อัปโหลดกระดาษคำตอบ (PDF / รูปถ่าย)"], horizontal=True, key="answer_mode"
+        ) != "ตอบในแอป"
+        sheet = state.sheet if state.sheet and state.sheet["version"] == v else None
 
-        if submitted:
-            answers = {q.id: state.get(f"ans_{v}_{q.id}") for q in exam.questions}
-            try:
-                with st.spinner("กำลังตรวจคำตอบ..."):
-                    state.results = grade_exam(exam, answers)
-                    state.mastery = scoring.concept_mastery(state.results)
-                with st.spinner("กำลังวิเคราะห์จุดที่ต้องเรียนเพิ่ม..."):
-                    state.report = advise(exam, state.results, state.mastery)
-                st.success("ตรวจเสร็จแล้ว ดูผลที่แท็บ **3. ผลและคำแนะนำ**")
-            except LLMError as e:
-                st.error(str(e))
+        if upload_mode:
+            uploaded = st.file_uploader(
+                "กระดาษคำตอบของผู้สอบ 1 คน", type=["pdf", "png", "jpg", "jpeg"], key=f"sheet_upload_{v}"
+            )
+            if st.button("อ่านคำตอบจากไฟล์", disabled=uploaded is None or not ready):
+                with st.spinner("กำลังอ่านกระดาษคำตอบด้วย AI..."):
+                    try:
+                        sheet_file = answer_reader.load_answer_sheet(uploaded.name, uploaded.getvalue())
+                        extracted = answer_reader.read_answers(exam, sheet_file)
+                        by_id = {a.question_id: a for a in extracted.answers}
+                        for q in exam.questions:  # เติมคำตอบลงฟอร์มให้ตรวจทาน
+                            state[f"ans_{v}_{q.id}"] = answer_reader.to_form_value(q, by_id.get(q.id))
+                        if extracted.student_name:
+                            state["student_name"] = extracted.student_name
+                        state.sheet = sheet = {"version": v, "file": sheet_file, "result": extracted}
+                    except (answer_reader.SheetError, LLMError) as e:
+                        st.error(str(e))
+            if sheet:
+                sheet_file, extracted = sheet["file"], sheet["result"]
+                name_text = f" · ชื่อผู้สอบ: **{extracted.student_name}**" if extracted.student_name else ""
+                st.info(
+                    f"อ่านจาก **{sheet_file.name}** ({sheet_file.pages} หน้า){name_text}\n\n"
+                    "ตรวจทานคำตอบด้านล่างเทียบกับภาพกระดาษคำตอบ แก้ส่วนที่อ่านผิด แล้วกด **ส่งคำตอบให้ตรวจ**"
+                )
+                if sheet_file.truncated:
+                    st.warning(f"ไฟล์มีมากกว่า {answer_reader.MAX_PAGES} หน้า ระบบอ่านเฉพาะ {answer_reader.MAX_PAGES} หน้าแรก")
+                if sheet_file.images:
+                    with st.expander("ดูภาพกระดาษคำตอบ (ไว้เทียบตอนตรวจทาน)"):
+                        for page_no, image in enumerate(sheet_file.images, start=1):
+                            st.image(image, caption=f"หน้า {page_no}")
+
+        if not upload_mode or sheet is not None:
+            extracted_by_id = {a.question_id: a for a in sheet["result"].answers} if upload_mode else {}
+            if render_answer_form(exam, v, upload_mode, extracted_by_id):
+                answers = {q.id: state.get(f"ans_{v}_{q.id}") for q in exam.questions}
+                state.files.pop("report", None)
+                try:
+                    with st.spinner("กำลังตรวจคำตอบ..."):
+                        state.results = grade_exam(exam, answers)
+                        state.mastery = scoring.concept_mastery(state.results)
+                    with st.spinner("กำลังวิเคราะห์จุดที่ต้องเรียนเพิ่ม..."):
+                        state.report = advise(exam, state.results, state.mastery)
+                    st.success("ตรวจเสร็จแล้ว ดูผลที่แท็บ **3. ผลและคำแนะนำ**")
+                except LLMError as e:
+                    st.error(str(e))
 
 # ---------------- Tab 3: ผลและคำแนะนำ ----------------
 with tab_result:
@@ -241,7 +312,7 @@ with tab_result:
             with col_a:
                 st.markdown("**จุดแข็ง**\n" + "\n".join(f"- {s}" for s in report.strengths))
             with col_b:
-                st.markdown("**แผนการทบทวน**\n" + "\n".join(f"{i}. {strip_numbering(s)}" for i, s in enumerate(report.study_plan, 1)))
+                st.markdown("**แผนการทบทวน**\n" + "\n".join(f"{i}. {export.strip_numbering(s)}" for i, s in enumerate(report.study_plan, 1)))
 
             st.markdown("#### เรื่องที่ต้องเรียนเพิ่ม / ปรับปรุง")
             pct_by_concept = {m.concept: m.percent for m in mastery}
@@ -311,6 +382,19 @@ with tab_result:
                         st.markdown("**ความเข้าใจที่คลาดเคลื่อน:**\n" + "\n".join(f"- {p}" for p in r.misconceptions))
                     st.markdown(f"**คำตอบตัวอย่าง:** {q.model_answer}")
 
+        st.markdown("#### พิมพ์รายงานผล")
+        student_name = st.text_input("ชื่อผู้สอบ (แสดงในรายงาน ไม่บังคับ)", key="student_name")
+        if st.button("📄 สร้างรายงานผล (PDF)"):
+            with st.spinner("กำลังสร้าง PDF..."):
+                try:
+                    state.files["report"] = export.report_pdf(exam, results, mastery, report, student_name)
+                except export.ExportError as e:
+                    st.error(str(e))
+        if "report" in state.files:
+            st.download_button(
+                "⬇️ รายงานผลการสอบ (PDF)", state.files["report"],
+                file_name="report.pdf", mime="application/pdf",
+            )
         st.download_button(
             "ดาวน์โหลดผลการประเมิน (JSON)",
             json.dumps({

@@ -68,6 +68,15 @@ def blocks_to_text(content: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+def blocks_to_images(content: list[dict]) -> list[bytes]:
+    """ดึงรูปจาก image block (base64) เพื่อส่งให้ Ollama ผ่านฟิลด์ images"""
+    return [
+        base64.standard_b64decode(block["source"]["data"])
+        for block in content
+        if block["type"] == "image"
+    ]
+
+
 def _call_ollama(system: str, content: list[dict], schema: type[T]) -> T:
     json_schema = schema.model_json_schema()
     # Ollama แนะนำให้ใส่ schema ใน prompt ด้วย นอกจากการบังคับผ่าน format
@@ -75,13 +84,14 @@ def _call_ollama(system: str, content: list[dict], schema: type[T]) -> T:
         f"{system}\n\nตอบกลับเป็น JSON ที่ตรงกับ schema นี้เท่านั้น:\n"
         f"{json.dumps(json_schema, ensure_ascii=False)}"
     )
+    user_message: dict = {"role": "user", "content": blocks_to_text(content)}
+    images = blocks_to_images(content)
+    if images:
+        user_message["images"] = images
     try:
         response = _get_ollama().chat(
             model=config.OLLAMA_MODEL,
-            messages=[
-                {"role": "system", "content": system_full},
-                {"role": "user", "content": blocks_to_text(content)},
-            ],
+            messages=[{"role": "system", "content": system_full}, user_message],
             format=json_schema,
             think=config.OLLAMA_THINK,
             options={"num_ctx": config.OLLAMA_NUM_CTX, "temperature": 0.3},

@@ -69,6 +69,23 @@ class SubjectiveGrade(BaseModel):
     feedback: str
 
 
+# ---------- คำตอบที่ถอดจากกระดาษคำตอบ (ผลลัพธ์จาก answer reader) ----------
+
+class ExtractedAnswer(BaseModel):
+    question_id: int
+    answer: str = Field(
+        description="ปรนัย: ตัวอักษรที่เลือก (ก/ข/ค/ง) หรือ 'ถูก'/'ผิด'; อัตนัย: ข้อความตามที่เขียนจริง; ไม่ได้ตอบ: ''"
+    )
+    choice_text: str = Field(description="เลือกตอบ (mcq): ข้อความของตัวเลือกที่ถูกทำเครื่องหมาย; ชนิดอื่น: ''")
+    confidence: Literal["high", "medium", "low"]
+    note: str = Field(description="ข้อสังเกต เช่น ขีดฆ่าแก้คำตอบ หรือส่วนที่อ่านไม่ออก")
+
+
+class ExtractedAnswerSheet(BaseModel):
+    student_name: str
+    answers: list[ExtractedAnswer]
+
+
 # ---------- ผลรายข้อ (โค้ดสร้าง ไม่ใช่ LLM) ----------
 
 class QuestionResult(BaseModel):

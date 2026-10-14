@@ -1,0 +1,82 @@
+import io
+
+import pytest
+from PIL import Image
+
+from src import answer_reader, export
+from src.schemas import ExtractedAnswer, Question
+
+COMMON = dict(concept="c", source_ref="สไลด์ 1", bloom_level="understand", difficulty="medium",
+              points=1, explanation="", model_answer="", key_points=[], rubric=[])
+MCQ = Question(id=1, type="mcq", question="q", choices=["Supervised", "Unsupervised", "RL", "Semi"],
+               correct_choice=1, **COMMON)
+TF = Question(id=2, type="true_false", question="q", choices=["ถูก", "ผิด"], correct_choice=0, **COMMON)
+ESSAY = Question(id=3, type="essay", question="q", choices=[], correct_choice=None, **COMMON)
+
+
+def ans(text: str, choice_text: str = "") -> ExtractedAnswer:
+    return ExtractedAnswer(question_id=1, answer=text, choice_text=choice_text, confidence="high", note="")
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("ข", 1), ("ข.", 1), ("(ค)", 2), (" ง ", 3), ("B", 1), ("c)", 2), ("Unsupervised", 1),
+    ("", None), ("คำตอบคือ ข", None), ("จ", None), ("E", None),
+])
+def test_mcq_answer_to_choice_index(text, expected):
+    assert answer_reader.to_form_value(MCQ, ans(text)) == expected
+
+
+@pytest.mark.parametrize("text, expected", [("ถูก", 0), ("ผิด", 1), ("True", 0), ("F", 1), ("?", None)])
+def test_true_false_answer(text, expected):
+    assert answer_reader.to_form_value(TF, ans(text)) == expected
+
+
+def test_subjective_answer_is_text_and_missing_is_empty():
+    assert answer_reader.to_form_value(ESSAY, ans("  คำตอบยาว  ")) == "คำตอบยาว"
+    assert answer_reader.to_form_value(ESSAY, None) == ""
+    assert answer_reader.to_form_value(MCQ, None) is None
+
+
+def _image_bytes(fmt: str) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (400, 300), "white").save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def test_choice_text_used_when_letter_missing():
+    assert answer_reader.to_form_value(MCQ, ans("", "Unsupervised")) is None  # ไม่ได้ตอบ
+    assert answer_reader.to_form_value(MCQ, ans("?", "Unsupervise")) == 1
+
+
+def test_consistency_warning_when_letter_and_choice_text_disagree():
+    assert answer_reader.consistency_warning(MCQ, ans("ค", "Unsupervised")) is not None
+    assert answer_reader.consistency_warning(MCQ, ans("ข", "Unsupervised")) is None
+    assert answer_reader.consistency_warning(MCQ, ans("ข", "")) is None  # เทียบไม่ได้ ไม่เตือน
+    assert answer_reader.consistency_warning(ESSAY, ans("ข้อความ")) is None
+
+
+def test_scanned_pdf_and_photo_become_page_images():
+    pdf = answer_reader.load_answer_sheet("scan.pdf", _image_bytes("PDF"))
+    assert pdf.pages == 1 and pdf.images[0].startswith(b"\x89PNG") and not pdf.truncated
+    photo = answer_reader.load_answer_sheet("photo.jpg", _image_bytes("JPEG"))
+    assert len(photo.images) == 1
+
+
+def test_typed_pdf_is_rendered_as_image_too():
+    try:
+        data = export.html_to_pdf("<p>ชื่อ นายทดสอบ</p><p>ข้อ 1. ข</p>")
+    except export.ExportError as e:
+        pytest.skip(f"ไม่มีเบราว์เซอร์สำหรับสร้าง PDF ทดสอบ: {e}")
+    sheet = answer_reader.load_answer_sheet("typed.pdf", data)
+    assert sheet.pages == 1 and len(sheet.images) == 1
+    width, height = Image.open(io.BytesIO(sheet.images[0])).size
+    assert max(width, height) == answer_reader.MAX_IMAGE_SIDE  # เรนเดอร์ละเอียดแล้วย่อเหลือขนาดสูงสุด
+
+
+def test_bad_files_raise_sheet_error():
+    with pytest.raises(answer_reader.SheetError):
+        answer_reader.load_answer_sheet("answers.docx", b"x")
+    with pytest.raises(answer_reader.SheetError):
+        answer_reader.load_answer_sheet("broken.pdf", b"not a pdf")
+    with pytest.raises(answer_reader.SheetError):
+        answer_reader.load_answer_sheet("broken.png", b"not an image")

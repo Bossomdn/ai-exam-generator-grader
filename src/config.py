@@ -23,6 +23,7 @@ EFFORT = {
     "generate": "high",  # ออกข้อสอบ + เฉลย + rubric ต้องละเอียด
     "grade": "medium",   # ตรวจอัตนัยทีละข้อ
     "advise": "medium",  # สรุปจุดอ่อนและคำแนะนำ
+    "read": "medium",    # ถอดคำตอบจากกระดาษคำตอบ PDF/รูป
 }
 
 # ใช้ streaming จึงตั้ง max_tokens สูงได้โดยไม่ timeout
