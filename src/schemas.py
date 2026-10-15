@@ -12,12 +12,32 @@ from pydantic import BaseModel, Field
 QuestionType = Literal["mcq", "true_false", "short_answer", "essay"]
 OBJECTIVE_TYPES = ("mcq", "true_false")
 
-TYPE_LABELS = {
+TYPE_LABELS = {  # เรียงตามลำดับที่ใช้ในข้อสอบ (ปรนัยก่อนอัตนัย)
     "mcq": "ปรนัย (เลือกตอบ)",
     "true_false": "ปรนัย (ถูก/ผิด)",
     "short_answer": "อัตนัย (ตอบสั้น)",
     "essay": "อัตนัย (เรียงความ)",
 }
+
+Difficulty = Literal["easy", "medium", "hard", "mixed"]
+DIFFICULTY_LABELS = {"easy": "ง่าย", "medium": "กลาง", "hard": "ยาก", "mixed": "คละ"}
+
+
+# ---------- สเปกข้อสอบ (ผลลัพธ์จาก request planner) ----------
+
+class SectionSpec(BaseModel):
+    type: QuestionType
+    count: int = Field(description="จำนวนข้อ")
+    points_each: float = Field(description="คะแนนต่อข้อ")
+    difficulty: Difficulty = Field(description="mixed = คละหลายระดับ")
+
+
+class ExamSpec(BaseModel):
+    title: str
+    sections: list[SectionSpec] = Field(description="ชนิดละ 1 รายการ เฉพาะชนิดที่จะออก")
+    focus: str = Field(description="แนวข้อสอบ/สิ่งที่เน้น เช่น ระดับการคิด ลักษณะคำถาม")
+    concepts: list[str] = Field(description="หัวข้อที่จะออกสอบ")
+    assumptions: list[str] = Field(description="สิ่งที่ผู้ใช้ไม่ได้ระบุ แล้วใช้ค่า default หรือตีความเอง")
 
 
 # ---------- ข้อสอบ (ผลลัพธ์จาก generator) ----------
@@ -47,9 +67,44 @@ class Question(BaseModel):
 
 class Exam(BaseModel):
     title: str
-    spec_summary: str = Field(description="สรุปว่าเข้าใจคำสั่งอย่างไร: ชนิด จำนวน ความยาก คะแนน และค่าที่ใช้ default")
+    spec_summary: str = Field(description="สรุปสั้น ๆ ว่าข้อสอบชุดนี้มีอะไรบ้าง")
     concepts: list[str]
     questions: list[Question]
+
+
+class RevisedQuestions(BaseModel):
+    questions: list[Question]
+
+
+# ---------- ผลตรวจคุณภาพข้อสอบ (ผลลัพธ์จาก quality reviewer) ----------
+
+class QuestionReview(BaseModel):
+    question_id: int
+    answer: str = Field(
+        description="ปรนัย: คำตอบที่คุณเลือกเองจากการทำข้อสอบ (ก/ข/ค/ง หรือ 'ถูก'/'ผิด'); อัตนัย: ''"
+    )
+    answer_text: str = Field(description="mcq: ข้อความของตัวเลือกที่คุณเลือก; ชนิดอื่น: ''")
+    problems: list[str] = Field(description="ปัญหาร้ายแรงที่ต้องแก้ ถ้าไม่มีให้ []")
+    suggestion: str = Field(description="วิธีแก้ ถ้าไม่มีปัญหาให้ ''")
+
+
+class ExamReview(BaseModel):
+    reviews: list[QuestionReview]
+
+
+class QuestionQuality(BaseModel):
+    """สถานะคุณภาพรายข้อ (โค้ดสรุปจากผลตรวจทุกรอบ)"""
+    question_id: int
+    status: Literal["passed", "fixed", "flagged", "unchecked"]  # ผ่าน / แก้แล้วผ่าน / ยังมีปัญหา / ไม่ได้ตรวจ
+    issues: list[str] = []  # fixed: ปัญหาที่เคยพบและแก้แล้ว, flagged: ปัญหาที่ยังเหลือ
+    revisions: int = 0
+
+
+class AgentStep(BaseModel):
+    """บันทึกการทำงานของ agent แต่ละขั้น (ไว้แสดงใน UI และรายงาน)"""
+    agent: str
+    summary: str
+    seconds: float
 
 
 # ---------- ผลการตรวจอัตนัย (ผลลัพธ์จาก grader) ----------

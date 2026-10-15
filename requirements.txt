@@ -1,5 +1,6 @@
 anthropic>=1.13
 ollama>=0.6
+langgraph>=1.0
 pypdfium2>=4
 pillow>=10
 playwright>=1.40

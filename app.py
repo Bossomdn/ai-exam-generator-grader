@@ -1,20 +1,28 @@
-"""Prototype: ระบบสร้างข้อสอบและตรวจประเมินอัตโนมัติ
+"""ระบบสร้างข้อสอบและตรวจประเมินอัตโนมัติ (multi-agent)
 
 รัน: streamlit run app.py
 """
 
 import json
+import math
+import time
+from collections import Counter
 from pathlib import Path
+from typing import Optional
 
 import streamlit as st
 
 from src import answer_reader, config, export, scoring
 from src.advisor import advise
-from src.generator import generate_exam
+from src.generation_graph import GenerationResult, run_generation
 from src.grader import grade_exam
 from src.llm import LLMError, check_ready
-from src.schemas import OBJECTIVE_TYPES, TYPE_LABELS, Exam, Question
-from src.sources import from_topic, load_text, load_upload
+from src.planner import describe_spec, normalize_spec, plan_exam, spec_problems
+from src.schemas import (
+    DIFFICULTY_LABELS, OBJECTIVE_TYPES, TYPE_LABELS, AgentStep, Exam, ExamSpec, Question, QuestionQuality,
+    SectionSpec,
+)
+from src.sources import Source, from_topic, load_text, load_upload
 
 SAMPLE = Path(__file__).parent / "samples" / "sample_lecture.txt"
 EXAMPLE_PROMPT = (
@@ -24,9 +32,20 @@ EXAMPLE_PROMPT = (
 
 st.set_page_config(page_title="AI Exam Generator & Grader", page_icon="📝", layout="wide")
 
+QUALITY_LABELS = {
+    "passed": "✅ ผ่านการตรวจคุณภาพ",
+    "fixed": "🔧 แก้ตามผลตรวจแล้วผ่าน",
+    "flagged": "⚠️ ผู้ตรวจยังพบปัญหา — ควรแก้เองก่อนนำไปใช้",
+    "unchecked": "❔ ผู้ตรวจไม่ได้ตรวจข้อนี้",
+}
+TYPE_BY_LABEL = {label: t for t, label in TYPE_LABELS.items()}
+DIFFICULTY_BY_LABEL = {label: d for d, label in DIFFICULTY_LABELS.items()}
+
 state = st.session_state
 for key, default in {
     "source": None, "exam": None, "version": 0,
+    "plan": None,  # สเปกจาก Request Planner ที่รอผู้ใช้ยืนยัน {"key", "spec", "step", "n"}
+    "quality": {}, "trace": [], "rounds": 0,  # ผลตรวจคุณภาพรายข้อ และบันทึกการทำงานของ agent
     "results": None, "mastery": None, "report": None, "notice": None,
     "files": {},  # ไฟล์ PDF ที่สร้างแล้ว {"exam" | "key" | "report": bytes}
     "sheet": None,  # กระดาษคำตอบที่อัปโหลด {"version", "file": AnswerSheetFile, "result": ExtractedAnswerSheet}
@@ -36,19 +55,105 @@ for key, default in {
 ready, ready_message = check_ready()
 
 
-def set_exam(exam: Exam) -> None:
-    state.exam = exam
+def set_exam(result: GenerationResult, source: Source) -> None:
+    state.exam = result.exam
+    state.source = source
+    state.quality = {q.question_id: q for q in result.quality}
+    state.trace = result.trace
+    state.rounds = result.rounds
     state.version += 1
     state.results = state.mastery = state.report = None
     state.files = {}
     state.sheet = None
 
 
-def render_answer_key(q: Question) -> None:
+def run_with_progress(source: Source, **kwargs) -> Optional[GenerationResult]:
+    """รันกราฟสร้างข้อสอบ พร้อมแสดงว่า agent ไหนทำอะไรเสร็จแล้วบ้าง"""
+    with st.status("กำลังสร้างข้อสอบ: Generator ออกข้อสอบ → Reviewer ตรวจ → ส่งกลับแก้ข้อที่ไม่ผ่าน", expanded=True) as status:
+        try:
+            result = run_generation(
+                source, **kwargs,
+                on_step=lambda s: status.write(f"**{s.agent}** · {s.summary} ({s.seconds:g} วินาที)"),
+            )
+        except LLMError as e:
+            status.update(label="สร้างข้อสอบไม่สำเร็จ", state="error")
+            st.error(str(e))
+            return None
+        status.update(label=f"สร้างข้อสอบเสร็จแล้ว ({sum(s.seconds for s in result.trace):.0f} วินาที)",
+                      state="complete", expanded=False)
+    return result
+
+
+def plan_key(source: Source, prompt: str) -> tuple:
+    """ใช้ตรวจว่าสเปกที่วิเคราะห์ไว้ยังตรงกับเนื้อหาและคำสั่งปัจจุบันไหม"""
+    return source.kind, source.name, hash(source.text or source.pdf_b64), prompt.strip()
+
+
+def table_number(value) -> float:
+    """ค่าตัวเลขจากตาราง (ช่องที่ว่างอาจเป็น None หรือ NaN) — ว่าง = 0"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0 if math.isnan(number) else number
+
+
+def render_spec_editor(spec: ExamSpec, n: int) -> ExamSpec:
+    """ให้ผู้ใช้ตรวจ/แก้สเปกจาก Request Planner ก่อนสร้างข้อสอบ (human-in-the-loop)"""
+    st.markdown("#### ตรวจสเปกข้อสอบก่อนสร้าง")
+    st.caption("Request Planner แปลงคำสั่งเป็นสเปกด้านล่าง แก้ได้ทุกช่อง (เพิ่ม/ลบแถวในตารางได้)")
+    if spec.assumptions:
+        st.info("**คำสั่งไม่ได้ระบุสิ่งต่อไปนี้ ระบบจึงตั้งค่าให้:**\n" + "\n".join(f"- {a}" for a in spec.assumptions))
+    title = st.text_input("ชื่อชุดข้อสอบ", value=spec.title, key=f"spec_title_{n}")
+    rows = st.data_editor(
+        [{
+            "ชนิด": TYPE_LABELS[s.type],
+            "จำนวนข้อ": s.count,
+            "คะแนนต่อข้อ": s.points_each,
+            "ความยาก": DIFFICULTY_LABELS[s.difficulty],
+        } for s in spec.sections],
+        column_config={
+            "ชนิด": st.column_config.SelectboxColumn(options=list(TYPE_LABELS.values()), required=True),
+            "จำนวนข้อ": st.column_config.NumberColumn(min_value=1, max_value=config.MAX_QUESTIONS, step=1, required=True),
+            "คะแนนต่อข้อ": st.column_config.NumberColumn(min_value=0.5, step=0.5, required=True),
+            "ความยาก": st.column_config.SelectboxColumn(options=list(DIFFICULTY_LABELS.values()), required=True),
+        },
+        num_rows="dynamic",
+        hide_index=True,
+        key=f"spec_sections_{n}",
+    )
+    focus = st.text_area("แนวข้อสอบ / สิ่งที่เน้น", value=spec.focus, key=f"spec_focus_{n}", height=70)
+    concepts = st.text_area(
+        "หัวข้อที่จะออกสอบ (บรรทัดละ 1 หัวข้อ)", value="\n".join(spec.concepts), key=f"spec_concepts_{n}", height=150
+    )
+    sections = [  # แถวที่กรอกไม่ครบจะถูกข้าม (normalize_spec ตัดแถว 0 ข้อ และเติมคะแนนที่ว่าง)
+        SectionSpec(
+            type=TYPE_BY_LABEL[r["ชนิด"]],
+            count=int(table_number(r.get("จำนวนข้อ"))),
+            points_each=table_number(r.get("คะแนนต่อข้อ")),
+            difficulty=DIFFICULTY_BY_LABEL[r["ความยาก"]],
+        )
+        for r in rows
+        if r.get("ชนิด") in TYPE_BY_LABEL and r.get("ความยาก") in DIFFICULTY_BY_LABEL
+    ]
+    return normalize_spec(ExamSpec(
+        title=title, sections=sections, focus=focus, concepts=concepts.splitlines(), assumptions=spec.assumptions,
+    ))
+
+
+def render_answer_key(q: Question, quality: Optional[QuestionQuality] = None) -> None:
     st.markdown(
         f"**ข้อ {q.id}** · {TYPE_LABELS[q.type]} · {q.points:g} คะแนน · "
         f"หัวข้อ: {q.concept} · ที่มา: {q.source_ref} · Bloom: {q.bloom_level} · ความยาก: {q.difficulty}"
     )
+    if quality:
+        issues = "\n".join(f"- {i}" for i in quality.issues)
+        if quality.status == "flagged":
+            st.warning(f"{QUALITY_LABELS['flagged']}\n{issues}")
+        elif quality.status == "fixed":
+            st.caption(f"{QUALITY_LABELS['fixed']} ({quality.revisions} ครั้ง) · ปัญหาที่เคยพบ: " + " / ".join(quality.issues))
+        else:
+            st.caption(QUALITY_LABELS[quality.status])
     st.markdown(q.question)
     if q.type in OBJECTIVE_TYPES:
         for i in range(len(q.choices)):
@@ -118,16 +223,22 @@ with st.sidebar:
     st.caption("เปลี่ยนได้ที่ `LLM_PROVIDER` ในไฟล์ `.env`")
     st.markdown(
         "**ขั้นตอน**\n"
-        "1. ใส่เนื้อหา + สั่งว่าอยากได้ข้อสอบแบบไหน\n"
+        "1. ใส่เนื้อหา + สั่งว่าอยากได้ข้อสอบแบบไหน → ตรวจสเปก → สร้าง\n"
         "2. ทำข้อสอบแล้วส่งตรวจ\n"
         "3. ดูคะแนนและเรื่องที่ต้องเรียนเพิ่ม"
+    )
+    st.markdown(
+        "**Agent ฝั่งสร้างข้อสอบ**\n"
+        "- Request Planner — แปลงคำสั่งเป็นสเปก\n"
+        "- Question Generator — ออกข้อสอบ + เฉลย + เกณฑ์\n"
+        f"- Quality Reviewer — ทำข้อสอบเองโดยไม่เห็นเฉลย หาจุดบกพร่อง แล้วส่งกลับแก้ (สูงสุด {config.MAX_REVISIONS} รอบ)"
     )
     if st.button("เริ่มใหม่ทั้งหมด"):
         state.clear()
         st.rerun()
 
 st.title("📝 ระบบสร้างข้อสอบและตรวจประเมินอัตโนมัติ")
-st.caption("Prototype · Multi-Agent System for Automated Assessment Generation and Evaluative Essay Grading")
+st.caption("Multi-Agent System for Automated Assessment Generation and Evaluative Essay Grading")
 
 if state.notice:
     st.success(state.notice)
@@ -160,18 +271,64 @@ with tab_create:
 
     user_prompt = st.text_area("อยากได้ข้อสอบแนวไหน แบบไหน กี่ข้อ", value=EXAMPLE_PROMPT, height=100)
 
-    if st.button("สร้างข้อสอบ", type="primary", disabled=source is None or not ready):
-        with st.spinner("กำลังออกข้อสอบพร้อมเฉลย... (อาจใช้เวลาหลายนาที โดยเฉพาะโมเดลในเครื่อง)"):
+    if st.button("วิเคราะห์คำสั่ง", type="primary", disabled=source is None or not ready):
+        with st.spinner("Request Planner กำลังแปลงคำสั่งเป็นสเปกข้อสอบ..."):
+            started = time.perf_counter()
             try:
-                set_exam(generate_exam(source, user_prompt))
-                state.source = source
+                planned = plan_exam(source, user_prompt)
+                total = sum(s.count for s in planned.sections)
+                state.plan = {
+                    "key": plan_key(source, user_prompt),
+                    "spec": planned,
+                    "step": AgentStep(
+                        agent="Request Planner",
+                        summary=f"แปลงคำสั่งเป็นสเปก: {total} ข้อ, {len(planned.concepts)} หัวข้อ (ผู้ใช้ตรวจแล้ว)",
+                        seconds=round(time.perf_counter() - started, 1),
+                    ),
+                    "n": (state.plan or {}).get("n", 0) + 1,
+                }
             except LLMError as e:
                 st.error(str(e))
 
+    plan = state.plan
+    if plan and source:
+        if plan["key"] != plan_key(source, user_prompt):
+            st.info("เนื้อหาหรือคำสั่งเปลี่ยนไปแล้ว กด **วิเคราะห์คำสั่ง** อีกครั้งเพื่อทำสเปกใหม่")
+        else:
+            spec = render_spec_editor(plan["spec"], plan["n"])
+            problems = spec_problems(spec)
+            for problem in problems:
+                st.error(problem)
+            if spec.sections:
+                st.caption("สรุปสเปก: " + describe_spec(spec).split("\n")[0])
+            if st.button("สร้างข้อสอบตามสเปกนี้", type="primary", disabled=bool(problems) or not ready):
+                result = run_with_progress(source, spec=spec, prior_steps=[plan["step"]])
+                if result:
+                    set_exam(result, source)
+
     exam: Exam | None = state.exam
     if exam:
+        st.divider()
         st.subheader(exam.title)
-        st.info(f"**ระบบเข้าใจคำสั่งว่า:** {exam.spec_summary}")
+        st.info(f"**สเปก:** {exam.spec_summary}")
+        if state.quality:
+            counts = Counter(q.status for q in state.quality.values())
+            parts = [f"{QUALITY_LABELS[s].split(' —')[0]} {counts[s]} ข้อ" for s in QUALITY_LABELS if counts[s]]
+            rounds = f" · ส่งกลับแก้ {state.rounds} รอบ" if state.rounds else ""
+            st.markdown("**ผลตรวจคุณภาพโดย Quality Reviewer:** " + " · ".join(parts) + rounds)
+            flagged = [i for i, q in state.quality.items() if q.status == "flagged"]
+            if flagged:
+                st.warning(
+                    f"ข้อ {', '.join(map(str, flagged))} ยังมีปัญหาหลังแก้ครบ {config.MAX_REVISIONS} รอบ "
+                    "ดูรายละเอียดในเฉลยด้านล่าง แล้วแก้หรือตัดทิ้งก่อนนำไปใช้จริง"
+                )
+        if state.trace:
+            with st.expander("ขั้นตอนการทำงานของ agent"):
+                st.dataframe(
+                    [{"ขั้น": i, "Agent": s.agent, "ทำอะไร": s.summary, "เวลา (วินาที)": s.seconds}
+                     for i, s in enumerate(state.trace, 1)],
+                    hide_index=True,
+                )
         if state.source and state.source.is_topic_only:
             st.warning("ข้อสอบนี้สร้างจากความรู้ของ AI (ไม่มีเอกสารอ้างอิง) ควรตรวจทานเฉลยก่อนนำไปใช้จริง")
         counts: dict[str, int] = {}
@@ -185,7 +342,7 @@ with tab_create:
         st.caption("หัวข้อที่วัด: " + ", ".join(exam.concepts))
         with st.expander("ดูข้อสอบพร้อมเฉลย (สำหรับผู้สอน)"):
             for q in exam.questions:
-                render_answer_key(q)
+                render_answer_key(q, state.quality.get(q.id))
         st.markdown("#### พิมพ์ข้อสอบ")
         if st.button("📄 สร้างไฟล์ PDF (ข้อสอบ + เฉลย)"):
             with st.spinner("กำลังสร้าง PDF..."):
@@ -333,13 +490,12 @@ with tab_result:
                 "คำสั่งสำหรับแบบฝึกชุดถัดไป (แก้ได้)", value=report.practice_prompt, key=f"practice_{state.version}"
             )
             if st.button("สร้างแบบฝึกเพิ่มเรื่องที่อ่อน", disabled=state.source is None or not ready):
-                with st.spinner("กำลังสร้างแบบฝึกชุดใหม่..."):
-                    try:
-                        set_exam(generate_exam(state.source, practice_prompt))
-                        state.notice = "สร้างแบบฝึกชุดใหม่แล้ว ไปทำที่แท็บ 2. ทำข้อสอบ"
-                        st.rerun()
-                    except LLMError as e:
-                        st.error(str(e))
+                # ใช้กราฟเดียวกับแท็บ 1 แต่ให้ Request Planner วางสเปกเองโดยไม่ต้องรอยืนยัน
+                result = run_with_progress(state.source, request=practice_prompt)
+                if result:
+                    set_exam(result, state.source)
+                    state.notice = "สร้างแบบฝึกชุดใหม่แล้ว ไปทำที่แท็บ 2. ทำข้อสอบ"
+                    st.rerun()
         else:
             st.warning("ยังไม่มีรายงานคำแนะนำ (การวิเคราะห์อาจล้มเหลว) ลองส่งตรวจใหม่อีกครั้ง")
 

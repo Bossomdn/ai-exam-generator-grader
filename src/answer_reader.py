@@ -146,13 +146,9 @@ def _choice_index_from_text(question: Question, text: str) -> Optional[int]:
     return best if scores[best] >= 0.6 else None
 
 
-def to_form_value(question: Question, extracted: Optional[ExtractedAnswer]) -> Union[int, str, None]:
-    """แปลงคำตอบที่ถอดได้เป็นค่าสำหรับฟอร์ม: ปรนัย = index ตัวเลือก (None ถ้าไม่ได้ตอบ/อ่านไม่ได้), อัตนัย = ข้อความ"""
-    if question.type in ("short_answer", "essay"):
-        return extracted.answer.strip() if extracted else ""
-    if extracted is None:
-        return None
-    answer = extracted.answer.strip()
+def parse_choice(question: Question, answer: str, choice_text: str = "") -> Optional[int]:
+    """แปลงคำตอบปรนัย (ตัวอักษร / ถูก-ผิด / ข้อความตัวเลือก) เป็น index ตัวเลือก (None = ไม่ได้ตอบ/จับคู่ไม่ได้)"""
+    answer = answer.strip()
     if not answer:
         return None
     if question.type == "true_false":
@@ -163,7 +159,16 @@ def to_form_value(question: Question, extracted: Optional[ExtractedAnswer]) -> U
             return 0
         return None
     index = _choice_index_from_letter(question, answer)
-    return index if index is not None else _choice_index_from_text(question, extracted.choice_text)
+    return index if index is not None else _choice_index_from_text(question, choice_text)
+
+
+def to_form_value(question: Question, extracted: Optional[ExtractedAnswer]) -> Union[int, str, None]:
+    """แปลงคำตอบที่ถอดได้เป็นค่าสำหรับฟอร์ม: ปรนัย = index ตัวเลือก (None ถ้าไม่ได้ตอบ/อ่านไม่ได้), อัตนัย = ข้อความ"""
+    if question.type in ("short_answer", "essay"):
+        return extracted.answer.strip() if extracted else ""
+    if extracted is None:
+        return None
+    return parse_choice(question, extracted.answer, extracted.choice_text)
 
 
 def consistency_warning(question: Question, extracted: Optional[ExtractedAnswer]) -> Optional[str]:
