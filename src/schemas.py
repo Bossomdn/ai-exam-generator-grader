@@ -207,6 +207,13 @@ class StudentRecord(BaseModel):
 
 
 class ClassSession(BaseModel):
-    format_version: int = 1
+    """การสอบ 1 ครั้งของห้องหนึ่ง (บันทึกลงฐานข้อมูลทุกครั้งที่เปลี่ยน ดู src/school_db.py)"""
     exam: Exam
     students: list[StudentRecord] = []
+
+
+class RosterEntry(BaseModel):
+    """นักเรียน 1 คนในรายชื่อห้อง"""
+    number: str  # เลขที่
+    name: str
+    code: str = ""  # รหัสนักเรียน (ใช้เชื่อมคนเดิมข้ามปีการศึกษา) ไม่มีได้

@@ -1,9 +1,6 @@
-"""ข้อมูลทั้งห้อง: รับคำตอบ (CSV / กระดาษที่ AI อ่าน) ตรวจทาน ตรวจทีละคน ตารางคะแนน และบันทึก/เปิดไฟล์ (LLM จำลอง)"""
-
-import pytest
+"""ข้อมูลทั้งห้อง: รับคำตอบ (CSV / กระดาษที่ AI อ่าน) ใช้ชื่อจากรายชื่อห้อง ตรวจทาน ตรวจทีละคน และตารางคะแนน (LLM จำลอง)"""
 
 from src import answer_reader, class_session, grader
-from src.class_session import ClassFileError
 from src.schemas import (
     CriterionScore, Exam, ExtractedAnswer, ExtractedAnswerSheet, Question, RubricCriterion, StudentRecord,
     SubjectiveGrade,
@@ -75,7 +72,7 @@ def test_only_reviewed_students_are_graded(monkeypatch):
     assert class_session.ready_to_grade(session) == [0, 1]
 
 
-def test_grade_score_table_csv_and_json_roundtrip(monkeypatch):
+def test_grade_score_table_and_csv(monkeypatch):
     monkeypatch.setattr(grader, "call_structured", fake_grade)
     session, _, _ = class_session.merge_students(class_session.new_session(EXAM), [
         student("เอ", {1: 0, 2: 1, 3: "คำตอบ"}, no="1"),
@@ -91,12 +88,6 @@ def test_grade_score_table_csv_and_json_roundtrip(monkeypatch):
     assert lines[0] == "เลขที่,ชื่อ,คะแนนรวม,คะแนนเต็ม,ร้อยละ,ปรนัย,อัตนัย,สถานะ,ข้อ 1,ข้อ 2,ข้อ 3"
     assert lines[1].startswith("1,เอ,7,12,58.3,2,5,ตรวจแล้ว") and "รอตรวจทาน" in lines[2]
 
-    loaded = class_session.from_json(class_session.to_json(session))
-    assert loaded == session and loaded.students[1].extracted.student_name == "บี"
-    with pytest.raises(ClassFileError):
-        class_session.from_json(b'{"students": []}')
-    with pytest.raises(ClassFileError):
-        class_session.from_json(b"not json")
 
 
 def test_objective_only_exam_needs_no_llm():
@@ -111,3 +102,25 @@ def test_read_sheet_calls_reader_and_notes_truncation(monkeypatch):
     file = answer_reader.AnswerSheetFile(name="big.pdf", pages=10, images=[b"x"], truncated=True)
     s = class_session.read_sheet(EXAM, file)
     assert s.name == "ดี" and "อ่านเฉพาะ" in s.import_notes[0]
+
+
+def test_normalize_no():
+    assert [class_session.normalize_no(n) for n in [" 07 ", "๑๒", "12/3", ""]] == ["7", "12", "12/3", ""]
+
+
+def test_roster_names_replace_misread_names_and_flag_mismatches():
+    roster = {"1": "นายสมชาย ใจดี", "2": "นางสาวสมศรี มีสุข"}
+    tone_marks = class_session.student_from_sheet(EXAM, "a.png", sheet(name="นายสมขาย ใจดื", no="๐๑"))
+    wrong_no = class_session.student_from_sheet(EXAM, "b.png", sheet(name="ด.ช.ปิติ ชูใจ", no="2"))
+    unknown = class_session.student_from_sheet(EXAM, "c.png", sheet(name="", no="9"))
+    blank = class_session.student_from_sheet(EXAM, "d.png", sheet(name="", no=""))
+    a, b, c, d = class_session.apply_roster([tone_marks, wrong_no, unknown, blank], roster)
+    assert (a.student_no, a.name) == ("1", "นายสมชาย ใจดี")
+    assert not [n for n in a.import_notes if not n.startswith("ข้อ ")]  # อ่านวรรณยุกต์ผิดเล็กน้อย ไม่ต้องเตือน
+    assert b.name == "นางสาวสมศรี มีสุข" and "ไม่ตรงกับเลขที่ 2" in b.import_notes[0]
+    assert c.name == "c" and c.import_notes[0] == "เลขที่ 9 ไม่อยู่ในรายชื่อห้อง"
+    assert "ไม่มีเลขที่" in d.import_notes[0]
+    assert class_session.apply_roster([tone_marks], {}) == [tone_marks]  # ไม่มีรายชื่อ = ไม่เปลี่ยน
+
+    session, _, _ = class_session.merge_students(class_session.new_session(EXAM), [a, b])
+    assert class_session.absent(session, {**roster, "3": "นายสาม"}) == ["3"]

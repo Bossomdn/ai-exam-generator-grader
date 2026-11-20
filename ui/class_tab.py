@@ -1,10 +1,12 @@
-"""แท็บ 4 (ครู): พิมพ์ข้อสอบ → สอบบนกระดาษ → อัปโหลดกระดาษคำตอบทีละหลายใบ (หรือ CSV) → AI อ่านคำตอบ
-→ ครูตรวจทาน → ตรวจทั้งห้อง → ตารางคะแนน / บันทึกข้อมูลห้อง"""
+"""แท็บ 4 (ครู): เลือกห้อง → พิมพ์ข้อสอบ → สอบบนกระดาษ → อัปโหลดกระดาษคำตอบทีละหลายใบ (หรือ CSV)
+→ AI อ่านคำตอบ → ครูตรวจทาน → ตรวจทั้งห้อง → ตารางคะแนน
+
+ทุกการเปลี่ยนแปลงบันทึกลงฐานข้อมูล (src/school_db.py) ทันที ปิดแล้วเปิดกลับมาทำต่อได้"""
 
 import streamlit as st
 
-from src import answer_reader, class_session, csv_import, export, scoring
-from src.class_session import ClassFileError
+from src import answer_reader, class_session, csv_import, export, school_db, scoring
+from src.class_session import normalize_no
 from src.llm import LLMError
 from src.schemas import OBJECTIVE_TYPES, TYPE_LABELS, ClassSession, Exam, StudentRecord
 
@@ -17,8 +19,14 @@ CSV = "ไฟล์ CSV (กรอกคำตอบเอง)"
 
 def render(ready: bool) -> None:
     st.caption("สอบบนกระดาษ แล้วสแกนหรือถ่ายรูปกระดาษคำตอบอัปโหลดทีละหลายใบ ให้ AI อ่านคำตอบ ครูตรวจทาน แล้วตรวจทั้งห้อง")
+    try:
+        with school_db.connect() as conn:
+            rooms, saved = school_db.classrooms(conn), school_db.sittings(conn)
+    except school_db.SchoolDbError as e:
+        st.error(str(e))
+        return
     if state.class_session is None:
-        start_session()
+        start_session(rooms, saved)
         return
     show_header(state.class_session)
     st.markdown("#### 1. พิมพ์ข้อสอบไปสอบ")
@@ -30,60 +38,88 @@ def render(ready: bool) -> None:
         review_section()
     st.markdown("#### 4. ตรวจและดูคะแนน")
     grade_section(ready)
-    st.markdown("#### บันทึกข้อมูลห้อง")
-    save_section(state.class_session)
+    close_section()
 
 
-def reset_class(session: ClassSession | None) -> None:
+def reset_class(session: ClassSession | None, sitting: school_db.Sitting | None = None) -> None:
     state.class_session = session
+    state.class_sitting = sitting
     state.class_import = None
     state.class_images = {}
     state.class_exam_pdf = None
     state.class_review_n += 1
 
 
-def start_session() -> None:
+def start_session(rooms: list[school_db.Classroom], saved: list[school_db.Sitting]) -> None:
     exam = state.exam
-    if exam:
-        if st.button(f"เริ่มเก็บคำตอบทั้งห้องด้วยข้อสอบ “{exam.title}”", type="primary"):
-            reset_class(class_session.new_session(exam))
-            st.rerun()
+    st.markdown("#### เริ่มการสอบ")
+    if not rooms:
+        st.info("ยังไม่มีห้องเรียน — เพิ่มห้องและนำเข้ารายชื่อนักเรียนที่แท็บ 5 ก่อน")
+    elif exam is None:
+        st.info("สร้างข้อสอบที่แท็บ 1 ก่อน")
     else:
-        st.info("สร้างข้อสอบที่แท็บ 1 ก่อน หรือเปิดไฟล์ข้อมูลห้องที่บันทึกไว้")
-    open_class_file()
+        col_room, col_term = st.columns([3, 1])
+        room = col_room.selectbox("ห้องที่สอบ", rooms, format_func=lambda c: c.label, key="class_room")
+        term = col_term.selectbox("ภาคเรียน", [1, 2, 3], index=school_db.current_term()[1] - 1, key="class_term")
+        if st.button(f"เริ่มเก็บคำตอบทั้งห้องด้วยข้อสอบ “{exam.title}”", type="primary"):
+            with school_db.connect() as conn:
+                sitting_id = school_db.open_sitting(conn, exam, room.id, term)
+            open_sitting(sitting_id)
+        st.caption("ถ้าห้องนี้เคยสอบข้อสอบชุดนี้แล้ว จะเปิดข้อมูลเดิมมาทำต่อ")
+    if saved:
+        st.markdown("#### เปิดการสอบที่บันทึกไว้")
+        by_id = {s.id: s for s in saved}
+        pick = st.selectbox(
+            "การสอบ", list(by_id), key="class_saved",
+            format_func=lambda i: f"{by_id[i].label} · ผู้สอบ {by_id[i].students} คน (ตรวจแล้ว {by_id[i].graded})",
+        )
+        if st.button("เปิดการสอบนี้"):
+            open_sitting(pick)
 
 
-def open_class_file() -> None:
-    uploaded = st.file_uploader("เปิดไฟล์ข้อมูลห้องที่บันทึกไว้ (.json)", type=["json"], key="class_file")
-    if uploaded and st.button("เปิดไฟล์ข้อมูลห้อง"):
-        try:
-            loaded = class_session.from_json(uploaded.getvalue())
-        except ClassFileError as e:
-            st.error(str(e))
-            return
-        reset_class(loaded)
-        if state.exam is None:  # ให้แท็บอื่นเห็นข้อสอบชุดนี้ด้วย (ดูเฉลย)
-            use_exam(loaded.exam)
-        st.rerun()
+def open_sitting(sitting_id: int) -> None:
+    with school_db.connect() as conn:
+        sitting, session = school_db.load_session(conn, sitting_id)
+    reset_class(session, sitting)
+    if state.exam is None:  # ให้แท็บอื่นเห็นข้อสอบชุดนี้ด้วย (ดูเฉลย)
+        use_exam(session.exam)
+    st.rerun()
+
+
+def save(session: ClassSession) -> None:
+    """เก็บข้อมูลห้องในแอป และบันทึกลงฐานข้อมูลทันที"""
+    state.class_session = session
+    with school_db.connect() as conn:
+        school_db.save_session(conn, state.class_sitting.id, session)
+
+
+def roster_names() -> dict[str, str]:
+    """รายชื่อห้องของการสอบนี้ {เลขที่: ชื่อ} (ว่าง = ห้องนี้ยังไม่ได้นำเข้ารายชื่อ)"""
+    with school_db.connect() as conn:
+        return {e.number: e.name for e in school_db.roster(conn, state.class_sitting.classroom.id)}
 
 
 def show_header(session: ClassSession) -> None:
-    exam = session.exam
+    exam, sitting = session.exam, state.class_sitting
     graded = sum(1 for s in session.students if s.results is not None)
     waiting = len(class_session.awaiting_review(session))
     st.markdown(
-        f"**ข้อสอบ:** {exam.title} · {len(exam.questions)} ข้อ · ผู้สอบ {len(session.students)} คน "
-        f"(รอตรวจทาน {waiting} · ตรวจแล้ว {graded})"
+        f"**{sitting.classroom.name}** ภาคเรียน {sitting.term}/{sitting.classroom.year} · **ข้อสอบ:** {exam.title} · "
+        f"{len(exam.questions)} ข้อ · ผู้สอบ {len(session.students)} คน (รอตรวจทาน {waiting} · ตรวจแล้ว {graded})"
     )
+    roster = roster_names()
+    if not roster:
+        st.caption("ห้องนี้ยังไม่มีรายชื่อนักเรียน — นำเข้าที่แท็บ 5 แล้วระบบจะใช้ชื่อจากรายชื่อตามเลขที่ "
+                   "แทนชื่อที่ AI อ่านจากลายมือ")
+    elif missing := class_session.absent(session, roster):
+        st.caption(f"ยังไม่มีคำตอบ {len(missing)} คน: เลขที่ {', '.join(missing)}")
     if state.exam and state.exam != exam:
-        st.info("ข้อมูลห้องนี้เป็นของข้อสอบชุดก่อน ไม่ใช่ชุดล่าสุดในแท็บ 1")
-        if st.button("เริ่มห้องใหม่ด้วยข้อสอบชุดล่าสุด (ข้อมูลห้องนี้จะถูกล้าง — บันทึกไฟล์ด้านล่างก่อน)"):
-            reset_class(class_session.new_session(state.exam))
-            st.rerun()
+        st.info("การสอบนี้ใช้ข้อสอบชุดก่อน ไม่ใช่ชุดล่าสุดในแท็บ 1 — ถ้าจะใช้ชุดล่าสุด ให้ปิดการสอบนี้ (ด้านล่าง) แล้วเริ่มใหม่")
 
 
 def print_section(exam: Exam) -> None:
-    st.caption("ให้ผู้สอบเขียนชื่อ เลขที่ และคำตอบลงในข้อสอบ (ปรนัยให้วงกลมตัวเลือก) AI จะอ่านชื่อและเลขที่จากกระดาษด้วย")
+    st.caption("ให้ผู้สอบเขียนชื่อ เลขที่ (ให้ชัด) และคำตอบลงในข้อสอบ (ปรนัยให้วงกลมตัวเลือก) "
+               "ระบบใช้เลขที่ที่ AI อ่านได้จับคู่กับรายชื่อห้อง")
     if st.button("📄 สร้าง PDF ข้อสอบ (ไม่มีเฉลย)"):
         with st.spinner("กำลังสร้าง PDF..."):
             try:
@@ -154,10 +190,10 @@ def read_sheets(files, pages_per: int | None) -> None:
             problems.append(f"{sheet.name}: {e} — หยุดอ่านใบที่เหลือ อ่านใหม่ได้ภายหลัง")
             break
         state.class_images[sheet.name] = sheet.images
-    students = class_session.dedupe(students)
+    students = class_session.dedupe(class_session.apply_roster(students, roster_names()))
     merged, added, updated = class_session.merge_students(state.class_session, students)
     flagged = sum(1 for s in students if s.import_notes)
-    state.class_session = merged
+    save(merged)
     state.class_import = {
         "source": "กระดาษคำตอบ", "added": added, "updated": updated,
         "extra": f" · มีคำเตือน {flagged} คน (ดูในขั้นที่ 3)" if flagged else "",
@@ -181,12 +217,13 @@ def csv_upload() -> None:
         except csv_import.CsvImportError as e:
             st.error(str(e))
             return
-        merged, added, updated = class_session.merge_students(state.class_session, result.students)
-        state.class_session = merged
+        students = class_session.apply_roster(result.students, roster_names())
+        merged, added, updated = class_session.merge_students(state.class_session, students)
+        save(merged)
         state.class_import = {
             "source": " CSV", "added": added, "updated": updated,
             "extra": f" · จับคู่คอลัมน์ได้ {len(result.matched_questions)}/{len(exam.questions)} ข้อ",
-            "warnings": result.warnings + [f"{s.name} — {n}" for s in result.students for n in s.import_notes],
+            "warnings": result.warnings + [f"{s.name} — {n}" for s in students for n in s.import_notes],
         }
         state.class_upload_n += 1  # ล้างช่องอัปโหลด กันกดนำเข้าซ้ำแล้วผลตรวจหาย
         state.class_review_n += 1
@@ -208,7 +245,7 @@ def review_section() -> None:
             for i in clean:
                 session = class_session.update_student(
                     session, i, session.students[i].model_copy(update={"reviewed": True}))
-            state.class_session = session
+            save(session)
             state.class_review_n += 1
             st.rerun()
         st.caption("AI อาจอ่านผิดโดยไม่มีคำเตือนได้ (เช่น วงตัวเลือกไม่ชัด) ควรสุ่มเปิดดูบางคนก่อนยืนยันรวด")
@@ -226,9 +263,13 @@ def review_section() -> None:
 def review_student(index: int) -> None:
     session = state.class_session
     exam, student = session.exam, session.students[index]
+    roster = roster_names()
     prefix = f"rev_{state.class_review_n}_{index}"
-    state.setdefault(f"{prefix}_name", student.name)
-    state.setdefault(f"{prefix}_no", student.student_no)
+    if roster:
+        state.setdefault(f"{prefix}_no", student.student_no if student.student_no in roster else None)
+    else:
+        state.setdefault(f"{prefix}_name", student.name)
+        state.setdefault(f"{prefix}_no", student.student_no)
     prefill(exam, prefix, student.answers)
 
     col_image, col_form = st.columns(2)
@@ -238,27 +279,49 @@ def review_student(index: int) -> None:
             for page, image in enumerate(images, start=1):
                 st.image(image, caption=f"{student.sheet_name} · หน้า {page}")
         else:
-            st.info("ไม่มีภาพกระดาษ (ภาพไม่ได้บันทึกในไฟล์ข้อมูลห้อง) — อัปโหลดกระดาษใบนี้ใหม่ถ้าต้องการเทียบ")
+            st.info("ไม่มีภาพกระดาษ (ภาพไม่ได้บันทึกในฐานข้อมูล) — อัปโหลดกระดาษใบนี้ใหม่ถ้าต้องการเทียบ")
     with col_form:
         for note in student.import_notes:
             if not note.startswith("ข้อ "):  # คำเตือนรายข้อแสดงในฟอร์มอยู่แล้ว
                 st.warning(f"⚠️ {note}")
+        if roster and student.extracted and student.extracted.student_name.strip():
+            st.caption(f"ชื่อที่ AI อ่านจากกระดาษ: {student.extracted.student_name}")
         extracted = {a.question_id: a for a in student.extracted.answers} if student.extracted else None
         with st.form(f"{prefix}_form"):
-            st.text_input("ชื่อ-นามสกุล", key=f"{prefix}_name")
-            st.text_input("เลขที่", key=f"{prefix}_no")
+            if roster:
+                st.selectbox("ผู้สอบ (จากรายชื่อห้อง)", list(roster), format_func=lambda no: f"เลขที่ {no} {roster[no]}",
+                             placeholder="เลือกนักเรียน", key=f"{prefix}_no")
+            else:
+                st.text_input("ชื่อ-นามสกุล", key=f"{prefix}_name")
+                st.text_input("เลขที่", key=f"{prefix}_no")
             answer_fields(exam, prefix, extracted)
             if st.form_submit_button("ยืนยันคำตอบของคนนี้", type="primary"):
-                confirmed = student.model_copy(update={
-                    "name": state[f"{prefix}_name"].strip() or student.name,
-                    "student_no": state[f"{prefix}_no"].strip(),
-                    "answers": collect(exam, prefix),
-                    "reviewed": True,
-                    "results": None,
-                })
-                state.class_session = class_session.update_student(session, index, confirmed)
-                state.class_review_n += 1
-                st.rerun()
+                confirm_review(index, prefix, roster)
+
+
+def confirm_review(index: int, prefix: str, roster: dict[str, str]) -> None:
+    session = state.class_session
+    student = session.students[index]
+    if roster:
+        number = state[f"{prefix}_no"]
+        if number is None:
+            st.error("เลือกผู้สอบจากรายชื่อห้องก่อนยืนยัน")
+            return
+        name = roster[number]
+    else:
+        number = normalize_no(state[f"{prefix}_no"])
+        name = state[f"{prefix}_name"].strip() or student.name
+    taken = [s.name for i, s in enumerate(session.students) if i != index and number and s.student_no == number]
+    if taken:
+        st.error(f"เลขที่ {number} มีคำตอบของ “{taken[0]}” อยู่แล้ว — ตรวจดูว่าใบไหนเลขที่ผิด")
+        return
+    confirmed = student.model_copy(update={
+        "name": name, "student_no": number, "answers": collect(session.exam, prefix), "reviewed": True,
+        "results": None,
+    })
+    save(class_session.update_student(session, index, confirmed))
+    state.class_review_n += 1
+    st.rerun()
 
 
 # ---------------- ตรวจและดูคะแนน ----------------
@@ -313,7 +376,7 @@ def grade_all(indices: list[int]) -> None:
         except LLMError as e:
             st.error(f"ตรวจของ {student.name} ไม่สำเร็จ: {e} — คนที่ตรวจแล้วเก็บไว้แล้ว กดตรวจต่อได้")
             return
-        state.class_session = class_session.update_student(state.class_session, i, graded)
+        save(class_session.update_student(state.class_session, i, graded))
     bar.progress(1.0, text=f"ตรวจครบ {len(indices)} คนแล้ว")
 
 
@@ -340,19 +403,11 @@ def show_student(exam: Exam, student: StudentRecord) -> None:
     st.dataframe(rows, hide_index=True)
 
 
-# ---------------- บันทึก ----------------
+# ---------------- ปิดการสอบ ----------------
 
-def save_section(session: ClassSession) -> None:
-    st.download_button(
-        "💾 บันทึกข้อมูลห้อง (.json)", class_session.to_json(session),
-        file_name="class_data.json", mime="application/json",
-    )
-    st.caption(
-        "ไฟล์นี้มีชื่อและคำตอบของผู้สอบ (ไม่รวมภาพกระดาษ) เปิดกลับมาทำต่อได้ภายหลัง · เก็บไว้ในเครื่อง ห้าม commit ขึ้น GitHub "
-        "(ถ้าเก็บในโปรเจกต์ ให้ไว้ในโฟลเดอร์ data/ ซึ่ง git ไม่สนใจ)"
-    )
-    with st.expander("เปิดไฟล์ข้อมูลห้องอื่น / ปิดห้องนี้"):
-        open_class_file()
-        if st.button("ปิดห้องนี้ (ล้างข้อมูลห้องออกจากแอป)"):
-            reset_class(None)
-            st.rerun()
+def close_section() -> None:
+    st.caption("บันทึกลงฐานข้อมูลในเครื่องอัตโนมัติทุกครั้งที่นำเข้า ตรวจทาน หรือตรวจคะแนน (ไม่รวมภาพกระดาษ) "
+               "· ดูคะแนนข้ามการสอบ รายคน รายห้อง รายชั้น ได้ที่แท็บ 5")
+    if st.button("ปิดการสอบนี้ (เปิดกลับมาได้จากรายการการสอบที่บันทึกไว้)"):
+        reset_class(None)
+        st.rerun()

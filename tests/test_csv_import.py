@@ -73,3 +73,22 @@ def test_missing_columns_and_unusable_files():
         csv_import.parse_responses(EXAM, "ชื่อ,คะแนน\nก,1\n".encode("utf-8"))  # ไม่มีคอลัมน์ "ข้อ n"
     with pytest.raises(csv_import.CsvImportError):
         csv_import.parse_responses(EXAM, b"")
+
+
+def test_roster_template_and_split_name_columns():
+    filled = csv_import.roster_template().decode("utf-8-sig") + "๐๑,6501,นายเอ  ใจดี\n2,,นางสาวบี\n,6503,ไม่มีเลขที่\n2,,นางสาวบี (แก้)\n"
+    entries, warnings = csv_import.parse_roster(filled.encode("utf-8-sig"))
+    assert [(e.number, e.code, e.name) for e in entries] == [("1", "6501", "นายเอ ใจดี"), ("2", "", "นางสาวบี (แก้)")]
+    assert any("แถวที่ 4" in w for w in warnings) and any("เลขที่ 2" in w for w in warnings)
+
+    split = to_csv(["ลำดับ", "เลขที่", "เลขประจำตัว", "คำนำหน้า", "ชื่อ", "นามสกุล"], [["1", "3", "6503", "ด.ญ.", "ซี", "ดีมาก"]])
+    entries, _ = csv_import.parse_roster(split.encode("cp874"))
+    assert [(e.number, e.code, e.name) for e in entries] == [("3", "6503", "ด.ญ.ซี ดีมาก")]
+
+    with pytest.raises(csv_import.CsvImportError, match="เลขที่"):
+        csv_import.parse_roster(to_csv(["ชื่อ"], [["ก"]]).encode("utf-8"))
+
+
+def test_answer_csv_normalizes_student_numbers():
+    text = to_csv(HEADER, [["๐๕", "สมศรี", "RL", "ถูก", "ตอบ"]])
+    assert csv_import.parse_responses(EXAM, text.encode("utf-8")).students[0].student_no == "5"

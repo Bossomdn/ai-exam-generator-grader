@@ -1,7 +1,8 @@
-"""นำเข้าคำตอบทั้งห้องจากไฟล์ CSV
+"""นำเข้าคำตอบทั้งห้องและรายชื่อนักเรียนจากไฟล์ CSV
 
 - template_csv(): เทมเพลตให้ครูกรอกคำตอบ (คอลัมน์ เลขที่, ชื่อ-นามสกุล, ข้อ 1, ข้อ 2, ...)
 - parse_responses(): อ่าน CSV เป็นคำตอบรายคน
+- roster_template() / parse_roster(): รายชื่อห้อง (เลขที่, รหัสนักเรียน, ชื่อ-นามสกุล)
 
 จับคู่คอลัมน์กับข้อสอบด้วยหัวคอลัมน์ที่ขึ้นต้นด้วย "ข้อ n" (คอลัมน์อื่นที่ไม่รู้จักจะถูกข้าม)
 ปรนัยจับคู่ด้วยข้อความตัวเลือก ตัวอักษร (ก ข ค ง / A B C D) หรือ ถูก/ผิด
@@ -14,7 +15,8 @@ from dataclasses import dataclass, field
 from typing import Optional, Union
 
 from .answer_reader import parse_choice
-from .schemas import OBJECTIVE_TYPES, Exam, Question, StudentRecord
+from .class_session import normalize_no
+from .schemas import OBJECTIVE_TYPES, Exam, Question, RosterEntry, StudentRecord
 
 NAME_TITLE = "ชื่อ-นามสกุล"
 QUESTION_HEADER = re.compile(r"^\s*ข้อ\s*(\d+)")
@@ -130,9 +132,69 @@ def parse_responses(exam: Exam, data: bytes) -> ImportResult:
                     notes.append(f"ข้อ {qid}: “{raw[:40]}” ไม่ตรงกับตัวเลือกทุกตัวอักษร จับคู่แบบใกล้เคียง")
         for qid in missing:
             answers[qid] = None if questions[qid].type in OBJECTIVE_TYPES else ""
-        student = StudentRecord(student_no=_cell(row, id_col), name=name, answers=answers, source="csv",
+        student = StudentRecord(student_no=normalize_no(_cell(row, id_col)), name=name, answers=answers, source="csv",
                                 import_notes=notes)
         if student.key in by_key:
             warnings.append(f"{name} มีมากกว่า 1 แถว — ใช้แถวล่างสุด")
         by_key[student.key] = student
     return ImportResult(students=list(by_key.values()), matched_questions=sorted(columns), warnings=warnings)
+
+
+# ---------------- รายชื่อห้อง ----------------
+
+def roster_template() -> bytes:
+    buf = io.StringIO()
+    csv.writer(buf).writerow(["เลขที่", "รหัสนักเรียน", NAME_TITLE])
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def _roster_columns(header: list[str]) -> dict[str, int]:
+    """หาคอลัมน์: number, code และชื่อแบบช่องเดียว (name) หรือแยก คำนำหน้า (title) / ชื่อ (first) / นามสกุล (last)"""
+    columns: dict[str, int] = {}
+    for col, raw in enumerate(header):
+        title = "".join(raw.split())
+        if "เลขที่" in title or title.casefold() in ("no", "no."):
+            role = "number"
+        elif "รหัส" in title or "ประจำตัว" in title or title.casefold() == "id":
+            role = "code"
+        elif ("ชื่อ" in title and "สกุล" in title) or title.casefold() == "name":
+            role = "name"
+        elif "คำนำหน้า" in title:
+            role = "title"
+        elif "นามสกุล" in title:
+            role = "last"
+        elif "ชื่อ" in title:
+            role = "first"
+        else:
+            continue
+        columns.setdefault(role, col)
+    return columns
+
+
+def parse_roster(data: bytes) -> tuple[list[RosterEntry], list[str]]:
+    """อ่านรายชื่อห้อง คืน (รายชื่อเรียงตามไฟล์, คำเตือน) — รองรับชื่อช่องเดียว หรือแยกคำนำหน้า/ชื่อ/นามสกุล"""
+    rows = [row for row in csv.reader(io.StringIO(_decode(data))) if any(cell.strip() for cell in row)]
+    if not rows:
+        raise CsvImportError("ไฟล์ว่าง ไม่มีข้อมูล")
+    columns = _roster_columns(rows[0])
+    if "number" not in columns or not {"name", "first"} & set(columns):
+        raise CsvImportError(f"ต้องมีคอลัมน์ “เลขที่” และ “{NAME_TITLE}” (ดาวน์โหลดเทมเพลตรายชื่อจากแอป)")
+    entries: dict[str, RosterEntry] = {}
+    warnings = []
+    for line, row in enumerate(rows[1:], start=2):
+        if "name" in columns:
+            name = _cell(row, columns["name"])
+        else:  # คำนำหน้าติดกับชื่อตามแบบไทย เช่น นายสมชาย ใจดี
+            first = _cell(row, columns.get("title")) + _cell(row, columns["first"])
+            name = " ".join(part for part in (first, _cell(row, columns.get("last"))) if part)
+        number = normalize_no(_cell(row, columns["number"]))
+        if not number or not name:
+            warnings.append(f"แถวที่ {line}: ไม่มีเลขที่หรือชื่อ — ข้าม")
+            continue
+        if number in entries:
+            warnings.append(f"เลขที่ {number} มีมากกว่า 1 แถว — ใช้แถวล่างสุด")
+        entries[number] = RosterEntry(number=number, name=" ".join(name.split()),
+                                      code=_cell(row, columns.get("code")))
+    if not entries:
+        raise CsvImportError("ไม่พบรายชื่อในไฟล์")
+    return list(entries.values()), warnings

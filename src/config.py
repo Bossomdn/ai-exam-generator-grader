@@ -1,10 +1,13 @@
 """ค่าตั้งต้นของระบบ (โมเดล, effort ของแต่ละงาน, เกณฑ์ต่าง ๆ)"""
 
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+ROOT = Path(__file__).resolve().parent.parent
 
 # เลือกผู้ให้บริการโมเดล: "ollama" (ฟรี รันในเครื่อง) หรือ "claude" (Claude API เสียเงินตามการใช้งาน)
 PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
@@ -45,6 +48,11 @@ WEAK_THRESHOLD = 70.0
 
 # จำนวนข้ออัตนัยที่ตรวจพร้อมกัน
 GRADING_WORKERS = 4
+
+# โฟลเดอร์เก็บข้อมูลนักเรียน: ฐานข้อมูลคะแนน (school.db) และไฟล์สำรอง (backups/)
+# ค่าเริ่มต้นคือ data/ ในโปรเจกต์ ซึ่ง git ไม่สนใจ · path แบบสัมพัทธ์นับจากโฟลเดอร์โปรเจกต์
+DATA_DIR = ROOT / Path(os.getenv("DATA_DIR", "data")).expanduser()
+DB_PATH = DATA_DIR / "school.db"
 
 
 def has_api_key() -> bool:
