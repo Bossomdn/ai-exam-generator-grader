@@ -1,0 +1,55 @@
+"""สถานะของแอป (st.session_state) และฟังก์ชันที่หลายแท็บใช้ร่วมกัน"""
+
+from typing import Optional
+
+import streamlit as st
+
+from src.generation_graph import GenerationResult, run_generation
+from src.llm import LLMError
+from src.sources import Source
+
+state = st.session_state
+
+DEFAULTS = {
+    "source": None, "exam": None, "version": 0,
+    "plan": None,  # สเปกจาก Request Planner ที่รอผู้ใช้ยืนยัน {"key", "spec", "step", "n"}
+    "quality": {}, "trace": [], "rounds": 0,  # ผลตรวจคุณภาพรายข้อ และบันทึกการทำงานของ agent
+    "results": None, "mastery": None, "report": None, "notice": None,
+    "files": {},  # ไฟล์ PDF ที่สร้างแล้ว {"exam" | "key" | "report": bytes}
+    "sheet": None,  # กระดาษคำตอบที่อัปโหลด {"version", "file": AnswerSheetFile, "result": ExtractedAnswerSheet}
+}
+
+
+def init_state() -> None:
+    for key, default in DEFAULTS.items():
+        state.setdefault(key, default)
+
+
+def set_exam(result: GenerationResult, source: Source) -> None:
+    """ใช้ข้อสอบชุดใหม่ และล้างผลของชุดเก่าทั้งหมด"""
+    state.exam = result.exam
+    state.source = source
+    state.quality = {q.question_id: q for q in result.quality}
+    state.trace = result.trace
+    state.rounds = result.rounds
+    state.version += 1
+    state.results = state.mastery = state.report = None
+    state.files = {}
+    state.sheet = None
+
+
+def run_with_progress(source: Source, **kwargs) -> Optional[GenerationResult]:
+    """รันกราฟสร้างข้อสอบ พร้อมแสดงว่า agent ไหนทำอะไรเสร็จแล้วบ้าง"""
+    with st.status("กำลังสร้างข้อสอบ: Generator ออกข้อสอบ → Reviewer ตรวจ → ส่งกลับแก้ข้อที่ไม่ผ่าน", expanded=True) as status:
+        try:
+            result = run_generation(
+                source, **kwargs,
+                on_step=lambda s: status.write(f"**{s.agent}** · {s.summary} ({s.seconds:g} วินาที)"),
+            )
+        except LLMError as e:
+            status.update(label="สร้างข้อสอบไม่สำเร็จ", state="error")
+            st.error(str(e))
+            return None
+        status.update(label=f"สร้างข้อสอบเสร็จแล้ว ({sum(s.seconds for s in result.trace):.0f} วินาที)",
+                      state="complete", expanded=False)
+    return result
