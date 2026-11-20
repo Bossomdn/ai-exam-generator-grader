@@ -175,3 +175,27 @@ def test_normalize_spec_and_problems():
     assert planner.spec_problems(too_many)
     assert planner.spec_problems(spec.model_copy(update={"sections": [], "concepts": []})) == [
         "ต้องมีข้อสอบอย่างน้อย 1 ข้อ", "ต้องมีหัวข้อที่จะออกสอบอย่างน้อย 1 หัวข้อ"]
+
+
+def test_revision_from_real_results_starts_at_generator_then_reviewer(use):
+    """ทางเข้าจาก Item Analyst: แก้เฉพาะข้อที่ส่งมา แล้ว Reviewer ตรวจข้อที่แก้ (ข้ออื่นถือว่าผ่านแล้ว)"""
+    exam = exam_of(mcq(1), mcq(2), essay(3))
+    fake = use(FakeLLM(exams=[], review=lambda r, ids: [ok(i, "x") for i in ids],
+                       revise=lambda ids: [mcq(i, correct=1) for i in ids]))
+    analyst = generation_graph.AgentStep(agent="Item Analyst", summary="ควรแก้ 1 ข้อ", seconds=1)
+    result = generation_graph.run_revision(
+        SOURCE, planner.spec_from_exam(exam), exam, {2: ["จากผลสอบจริง: เฉลยน่าจะผิด"]}, {2: "ตรวจเฉลย"},
+        prior_steps=[analyst],
+    )
+    assert fake.calls == ["RevisedQuestions", "ExamReview"] and fake.reviewed == [[2]]
+    assert result.exam.questions[1].correct_choice == 1
+    assert {q.question_id: q.status for q in result.quality} == {1: "passed", 2: "fixed", 3: "passed"}
+    assert [s.agent for s in result.trace] == ["Item Analyst", "Question Generator (แก้ไข)", "Quality Reviewer"]
+
+
+def test_spec_from_exam_rebuilds_sections():
+    exam = exam_of(mcq(1), mcq(2, points=2), mcq(3, points=2), essay(4))
+    spec = planner.spec_from_exam(exam)
+    assert [(s.type, s.count, s.points_each, s.difficulty) for s in spec.sections] == [
+        ("mcq", 3, 2, "medium"), ("essay", 1, 1, "medium")]
+    assert spec.concepts == ["A"] and spec.title == "x"

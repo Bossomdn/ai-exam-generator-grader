@@ -35,9 +35,9 @@ GENERATE_PROMPT = f"""คุณคือ Question Generator ผู้เชี�
 
 {RULES}"""
 
-REVISE_PROMPT = f"""คุณคือ Question Generator หน้าที่รอบนี้คือแก้ข้อสอบที่ Quality Reviewer พบปัญหา
+REVISE_PROMPT = f"""คุณคือ Question Generator หน้าที่รอบนี้คือแก้ข้อสอบที่ Quality Reviewer หรือ Item Analyst (วิเคราะห์จากผลสอบจริงของนักเรียน) พบปัญหา
 
-- <questions_to_fix> คือข้อที่ต้องแก้ แต่ละข้อมี <problems> ที่ผู้ตรวจพบ และ <suggestion> วิธีแก้ที่ผู้ตรวจเสนอ
+- <questions_to_fix> คือข้อที่ต้องแก้ แต่ละข้อมี <problems> ที่พบ และ <suggestion> วิธีแก้ที่เสนอ
 - แก้ให้ปัญหาที่ระบุหมดไป จะปรับคำถาม ตัวเลือก เฉลย หรือเขียนข้อใหม่ทั้งข้อก็ได้ ตรวจเฉลยกับเนื้อหาให้แน่ใจก่อนตอบ
 - ต้องคง id, type, points และ concept เดิม และต้องไม่ซ้ำกับข้ออื่นใน <other_questions>
 - ส่งกลับเฉพาะข้อที่แก้ ครบทุกข้อใน <questions_to_fix>

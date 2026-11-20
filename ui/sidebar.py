@@ -28,7 +28,8 @@ def render(ready: bool, ready_message: str) -> None:
             "**Agent ฝั่งสร้างข้อสอบ**\n"
             "- Request Planner — แปลงคำสั่งเป็นสเปก\n"
             "- Question Generator — ออกข้อสอบ + เฉลย + เกณฑ์\n"
-            f"- Quality Reviewer — ทำข้อสอบเองโดยไม่เห็นเฉลย หาจุดบกพร่อง แล้วส่งกลับแก้ (สูงสุด {config.MAX_REVISIONS} รอบ)"
+            f"- Quality Reviewer — ทำข้อสอบเองโดยไม่เห็นเฉลย หาจุดบกพร่อง แล้วส่งกลับแก้ (สูงสุด {config.MAX_REVISIONS} รอบ)\n"
+            "- Item Analyst — อ่านสถิติจากผลสอบจริงทั้งห้อง วินิจฉัยข้อที่มีปัญหา แล้วส่งให้ Generator แก้"
         )
         st.markdown(
             "**Agent ฝั่งตรวจเรียงความ**\n"

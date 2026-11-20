@@ -1,13 +1,13 @@
 """สถานะของแอป (st.session_state) และฟังก์ชันที่หลายแท็บใช้ร่วมกัน"""
 
-from typing import Optional
+from typing import Callable, Optional
 
 import streamlit as st
 
 from src.generation_graph import GenerationResult, run_generation
 from src.grading_graph import GRADER_LABELS
 from src.llm import LLMError
-from src.schemas import Exam, QuestionResult
+from src.schemas import AgentStep, Exam, QuestionResult
 from src.sources import Source
 
 state = st.session_state
@@ -27,6 +27,8 @@ DEFAULTS = {
     "class_review_n": 0,  # เปลี่ยน key ของฟอร์มตรวจทานเมื่อข้อมูลห้องเปลี่ยน (กันค่าเก่าค้าง)
     "class_images": {},  # ภาพกระดาษคำตอบ {sheet_name: [PNG]} (ไม่บันทึกลงฐานข้อมูล เพราะใหญ่)
     "class_exam_pdf": None,  # PDF ข้อสอบของห้องนี้สำหรับพิมพ์
+    "item_report": None,  # ผลของ Item Analyst {"key", "report", "seconds"} (key บอกว่าวิเคราะห์จากข้อมูลชุดไหน)
+    "item_revision": None,  # ข้อสอบฉบับปรับปรุงจากผลสอบจริง {"key", "result": GenerationResult, "source"}
     # แท็บ 5: ห้องเรียนและคะแนน
     "school_notice": None,  # (ข้อความสำเร็จ, [คำเตือน]) จากการนำเข้ารายชื่อ / กู้คืน
     "school_upload_n": 0,
@@ -60,17 +62,24 @@ def use_exam(exam: Exam, source: Optional[Source] = None) -> None:
 
 def run_with_progress(source: Source, **kwargs) -> Optional[GenerationResult]:
     """รันกราฟสร้างข้อสอบ พร้อมแสดงว่า agent ไหนทำอะไรเสร็จแล้วบ้าง"""
-    with st.status("กำลังสร้างข้อสอบ: Generator ออกข้อสอบ → Reviewer ตรวจ → ส่งกลับแก้ข้อที่ไม่ผ่าน", expanded=True) as status:
+    return show_progress(
+        "กำลังสร้างข้อสอบ: Generator ออกข้อสอบ → Reviewer ตรวจ → ส่งกลับแก้ข้อที่ไม่ผ่าน", "สร้างข้อสอบ",
+        lambda on_step: run_generation(source, **kwargs, on_step=on_step),
+    )
+
+
+def show_progress(
+    label: str, task: str, run: Callable[[Callable[[AgentStep], None]], GenerationResult]
+) -> Optional[GenerationResult]:
+    """รันกราฟฝั่งสร้างข้อสอบ (run รับ on_step) และแสดงทีละขั้นว่า agent ไหนทำอะไรเสร็จแล้ว"""
+    with st.status(label, expanded=True) as status:
         try:
-            result = run_generation(
-                source, **kwargs,
-                on_step=lambda s: status.write(f"**{s.agent}** · {s.summary} ({s.seconds:g} วินาที)"),
-            )
+            result = run(lambda s: status.write(f"**{s.agent}** · {s.summary} ({s.seconds:g} วินาที)"))
         except LLMError as e:
-            status.update(label="สร้างข้อสอบไม่สำเร็จ", state="error")
+            status.update(label=f"{task}ไม่สำเร็จ", state="error")
             st.error(str(e))
             return None
-        status.update(label=f"สร้างข้อสอบเสร็จแล้ว ({sum(s.seconds for s in result.trace):.0f} วินาที)",
+        status.update(label=f"{task}เสร็จแล้ว ({sum(s.seconds for s in result.trace):.0f} วินาที)",
                       state="complete", expanded=False)
     return result
 

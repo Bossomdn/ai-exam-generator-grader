@@ -11,12 +11,14 @@ from streamlit.testing.v1 import AppTest
 import src.advisor
 import src.generator
 import src.grader
+import src.item_analyst
 import src.llm
 import src.planner
 import src.reviewer
 from src import answer_reader, class_session, csv_import, school_db
 from src.schemas import (
-    ClassSession, CriterionScore, Exam, ExamReview, ExamSpec, ExtractedAnswer, ExtractedAnswerSheet, LearningReport,
+    ClassSession, CriterionScore, Exam, ExamReview, ExamSpec, ExtractedAnswer, ExtractedAnswerSheet, ItemAnalystReport,
+    ItemDiagnosis, LearningReport,
     Question, QuestionReview, RevisedQuestions, RosterEntry, RubricCriterion, SectionSpec, StudentRecord,
     SubjectiveGrade, WeakTopic,
 )
@@ -65,13 +67,19 @@ def fake_llm(*, system, content, schema, effort):
             weak_topics=[WeakTopic(concept="Overfitting", why="w", review=["สไลด์ 2"], actions=["a"])],
             practice_prompt="ปรนัย 3 ข้อ เรื่อง Overfitting",
         )
+    if schema is ItemAnalystReport:  # ข้อแรกที่ส่งมาให้แก้ ข้ออื่นใช้ต่อ
+        ids = [int(i) for i in re.findall(r'<item id="(\d+)"', text)]
+        return ItemAnalystReport(summary="บางข้อควรปรับ", items=[
+            ItemDiagnosis(question_id=i, diagnosis=f"วินิจฉัยข้อ {i}", action="keep" if n else "revise",
+                          suggestion="" if n else "เปลี่ยนตัวลวงที่ไม่มีคนเลือก")
+            for n, i in enumerate(ids)])
     raise AssertionError(f"ไม่ได้เตรียมคำตอบของ {schema.__name__}")
 
 
 @pytest.fixture
 def app(monkeypatch) -> AppTest:
     monkeypatch.setattr(src.llm, "check_ready", lambda: (True, "พร้อม (จำลอง)"))
-    for module in (src.planner, src.generator, src.reviewer, src.grader, src.advisor):
+    for module in (src.planner, src.generator, src.reviewer, src.grader, src.advisor, src.item_analyst):
         monkeypatch.setattr(module, "call_structured", fake_llm)
     at = AppTest.from_file(APP, default_timeout=60)
     at.run()
@@ -273,3 +281,30 @@ def test_school_tab_adds_room_and_shows_scores(app):
 
     click(at, "สร้างไฟล์สำรอง")
     assert at.session_state["school_backup"].startswith(b"SQLite format 3")
+
+
+def test_class_tab_item_analysis_revises_exam(app):
+    at = app
+    exam = Exam(title="ชุดวิเคราะห์", spec_summary="", concepts=["Supervised", "Overfitting"],
+                questions=[mcq(1), mcq(2), ESSAY])
+    add_room()
+    start_class(at, exam)
+    filled = csv_import.template_csv(exam).decode("utf-8-sig") + "1,เอ,ก,ก1,ตอบ\n2,บี,ข,ข,\n3,ซี,ก,ค,ตอบ\n"
+    at.session_state["class_session"] = class_session.merge_students(
+        at.session_state["class_session"], csv_import.parse_responses(exam, filled.encode("utf-8")).students)[0]
+    at.run()
+    click(at, "ตรวจคำตอบที่ยังไม่ได้ตรวจ (3 คน)")
+    assert any("ผู้สอบที่ตรวจแล้ว **3 คน**" in m.value for m in at.markdown)
+
+    [b for b in at.button if b.label.startswith("🔍 ให้ Item Analyst")][0].click().run()
+    assert not at.exception, at.exception
+    assert any("บางข้อควรปรับ" in i.value for i in at.info)
+    [b for b in at.button if b.label.startswith("🛠️ ปรับปรุงข้อสอบตามคำแนะนำ (1 ข้อ)")][0].click().run()
+    assert not at.exception, at.exception
+    assert any("ก่อนแก้" in c.value for c in at.caption) and any("Reviewer ตรวจผ่าน" in m.value for m in at.markdown)
+
+    click(at, "ใช้ข้อสอบฉบับปรับปรุง (ดูเฉลย / พิมพ์ที่แท็บ 1)")
+    assert at.session_state["exam"].title == "ชุดวิเคราะห์ (ฉบับปรับปรุงจากผลสอบ)"
+    assert [s.agent for s in at.session_state["trace"]] == [
+        "Item Analyst", "Question Generator (แก้ไข)", "Quality Reviewer"]
+    assert at.session_state["class_session"].exam == exam  # ผลสอบเดิมยังผูกกับข้อสอบฉบับที่ใช้สอบจริง

@@ -1,11 +1,12 @@
 """ลำดับการทำงานของ agent ฝั่งสร้างข้อสอบ (LangGraph)
 
     START ─┬─ (ยังไม่มีสเปก) → request_planner ─┐
-           └─ (ผู้ใช้ยืนยันสเปกแล้ว) ────────────┴→ question_generator → quality_reviewer ─┬→ END (ผ่านหมด / ครบรอบ)
-                                                                  ↑                        │
-                                                                  └──── revise_questions ←─┘ (มีข้อไม่ผ่าน, ≤ MAX_REVISIONS รอบ)
+           ├─ (ผู้ใช้ยืนยันสเปกแล้ว) ────────────┴→ question_generator → quality_reviewer ─┬→ END (ผ่านหมด / ครบรอบ)
+           │                                                      ↑                        │
+           └─ (Item Analyst ส่งข้อที่ควรแก้มา) ───────────────→ revise_questions ←───────────┘ (มีข้อไม่ผ่าน, ≤ MAX_REVISIONS รอบ)
 
 Reviewer รอบแรกตรวจทุกข้อ รอบถัดไปตรวจเฉพาะข้อที่เพิ่งแก้
+ทางเข้าที่สาม (run_revision) ใช้ปรับปรุงข้อสอบจากผลสอบจริง: เริ่มที่การแก้ แล้ว Reviewer ตรวจข้อที่แก้ตามปกติ
 """
 
 import operator
@@ -126,6 +127,8 @@ def revise_questions(state: GenerationState) -> dict:
 
 
 def _start_route(state: GenerationState) -> str:
+    if state.get("issues"):  # ข้อสอบเดิม + ปัญหาจากผลสอบจริง → แก้เลย
+        return "revise_questions"
     return "question_generator" if state.get("spec") else "request_planner"
 
 
@@ -139,7 +142,7 @@ def build_graph():
     graph.add_node("question_generator", question_generator)
     graph.add_node("quality_reviewer", quality_reviewer)
     graph.add_node("revise_questions", revise_questions)
-    graph.add_conditional_edges(START, _start_route, ["request_planner", "question_generator"])
+    graph.add_conditional_edges(START, _start_route, ["request_planner", "question_generator", "revise_questions"])
     graph.add_edge("request_planner", "question_generator")
     graph.add_edge("question_generator", "quality_reviewer")
     graph.add_conditional_edges("quality_reviewer", _review_route, ["revise_questions", END])
@@ -187,6 +190,30 @@ def run_generation(
     initial: GenerationState = {"source": source, "request": request, "trace": list(prior_steps)}
     if spec is not None:
         initial["spec"] = spec
+    return _run(initial, on_step)
+
+
+def run_revision(
+    source: Source,
+    spec: ExamSpec,
+    exam: Exam,
+    issues: dict[int, list[str]],
+    suggestions: dict[int, str],
+    *,
+    prior_steps: list[AgentStep] = (),
+    on_step: Optional[Callable[[AgentStep], None]] = None,
+) -> GenerationResult:
+    """แก้ข้อสอบที่ใช้แล้วตามปัญหาจากผลสอบจริง (Item Analyst) ผ่านลูป Generator ⇄ Reviewer เดิม"""
+    initial: GenerationState = {
+        "source": source, "spec": spec, "exam": exam, "pending": [],
+        "issues": issues, "suggestions": suggestions, "found": {i: list(p) for i, p in issues.items()},
+        "revised": {}, "checked": [q.id for q in exam.questions if q.id not in issues], "rounds": 0,
+        "trace": list(prior_steps),
+    }
+    return _run(initial, on_step)
+
+
+def _run(initial: GenerationState, on_step: Optional[Callable[[AgentStep], None]]) -> GenerationResult:
     final: GenerationState = initial
     for mode, chunk in GRAPH.stream(initial, stream_mode=["updates", "values"]):
         if mode == "values":
