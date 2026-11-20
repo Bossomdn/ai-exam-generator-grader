@@ -22,6 +22,9 @@ DEFAULTS = {
     "class_session": None,  # ClassSession
     "class_import": None,  # สรุปการนำเข้าครั้งล่าสุด
     "class_upload_n": 0,  # เปลี่ยน key ของช่องอัปโหลดเพื่อล้างไฟล์หลังนำเข้าแล้ว
+    "class_review_n": 0,  # เปลี่ยน key ของฟอร์มตรวจทานเมื่อข้อมูลห้องเปลี่ยน (กันค่าเก่าค้าง)
+    "class_images": {},  # ภาพกระดาษคำตอบ {sheet_name: [PNG]} (ไม่บันทึกลงไฟล์ห้อง เพราะใหญ่)
+    "class_exam_pdf": None,  # PDF ข้อสอบของห้องนี้สำหรับพิมพ์
 }
 
 

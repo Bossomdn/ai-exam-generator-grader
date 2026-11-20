@@ -6,8 +6,9 @@ from src import answer_reader, scoring
 from src.advisor import advise
 from src.grader import grade_exam
 from src.llm import LLMError
-from src.schemas import OBJECTIVE_TYPES, TYPE_LABELS, Exam
+from src.schemas import Exam
 
+from .answer_form import answer_fields
 from .common import state
 
 
@@ -78,39 +79,5 @@ def upload_answer_sheet(exam: Exam, v: int, sheet: dict | None, ready: bool) -> 
 def render_answer_form(exam: Exam, v: int, upload_mode: bool, extracted_by_id: dict, ready: bool) -> bool:
     """ฟอร์มตอบข้อสอบ (ใช้ตรวจทานคำตอบที่ถอดจากไฟล์ด้วย) คืน True เมื่อกดส่งตรวจ"""
     with st.form(f"exam_form_{v}"):
-        for q in exam.questions:
-            st.markdown(f"**ข้อ {q.id}.** {q.question}")
-            st.caption(f"{TYPE_LABELS[q.type]} · {q.points:g} คะแนน")
-            key = f"ans_{v}_{q.id}"
-            if upload_mode:
-                a = extracted_by_id.get(q.id)
-                if a is None:
-                    st.warning("⚠️ ไม่พบคำตอบข้อนี้ในไฟล์ — ตรวจดูว่าผู้สอบไม่ได้ตอบ หรือระบบอ่านไม่เจอ")
-                elif a.answer and q.type in OBJECTIVE_TYPES and answer_reader.to_form_value(q, a) is None:
-                    st.warning(f"⚠️ อ่านได้ว่า “{a.answer}” แต่จับคู่กับตัวเลือกไม่ได้ กรุณาเลือกเอง")
-                elif mismatch := answer_reader.consistency_warning(q, a):
-                    st.warning(f"⚠️ {mismatch} — อาจอ่านเครื่องหมายผิด กรุณาเทียบกับภาพ")
-                elif a.confidence != "high":
-                    level = "อ่านไม่ค่อยออก" if a.confidence == "low" else "ไม่แน่ใจบางส่วน"
-                    st.warning(f"⚠️ {level}" + (f" — {a.note}" if a.note else "") + " · กรุณาตรวจทาน")
-            if q.type in OBJECTIVE_TYPES:
-                # ไม่ส่ง index ถ้ามีค่าใน session_state แล้ว (เช่น ค่าที่ถอดจากไฟล์) เพื่อไม่ให้ Streamlit เตือนค่าซ้อน
-                default = {} if key in state else {"index": None}
-                st.radio(
-                    f"คำตอบข้อ {q.id}",
-                    options=list(range(len(q.choices))),
-                    format_func=lambda i, q=q: scoring.choice_label(q, i),
-                    key=key,
-                    label_visibility="collapsed",
-                    **default,
-                )
-            else:
-                st.text_area(
-                    f"คำตอบข้อ {q.id}",
-                    key=key,
-                    height=120 if q.type == "short_answer" else 260,
-                    placeholder="พิมพ์คำตอบที่นี่",
-                    label_visibility="collapsed",
-                )
-            st.write("")
+        answer_fields(exam, f"ans_{v}", extracted_by_id if upload_mode else None)
         return st.form_submit_button("ส่งคำตอบให้ตรวจ", type="primary", disabled=not ready)

@@ -14,7 +14,7 @@ import src.grader
 import src.llm
 import src.planner
 import src.reviewer
-from src import answer_reader, class_session, forms
+from src import answer_reader, class_session, csv_import
 from src.schemas import (
     CriterionScore, Exam, ExamReview, ExamSpec, ExtractedAnswer, ExtractedAnswerSheet, LearningReport, Question,
     QuestionReview, RevisedQuestions, RubricCriterion, SectionSpec, SubjectiveGrade, WeakTopic,
@@ -122,7 +122,7 @@ def test_uploaded_sheet_shows_review_warnings(app):
     at = app
     exam = Exam(title="ชุดทดสอบ", spec_summary="", concepts=["Supervised", "Overfitting"],
                 questions=[mcq(1), mcq(2), ESSAY])
-    extracted = ExtractedAnswerSheet(student_name="นางสาวทดสอบ", answers=[
+    extracted = ExtractedAnswerSheet(student_name="นางสาวทดสอบ", student_no="", answers=[
         ExtractedAnswer(question_id=1, answer="ข", choice_text="ค1", confidence="high", note=""),  # ตัวอักษรไม่ตรงข้อความ
         ExtractedAnswer(question_id=3, answer="คำตอบ", choice_text="", confidence="low", note="ลายมือไม่ชัด"),
     ])  # ข้อ 2 หายไป
@@ -146,8 +146,8 @@ def test_class_tab_imports_and_grades_whole_class(app):
     at.session_state["exam"] = exam
     at.run()
     click(at, "เริ่มเก็บคำตอบทั้งห้องด้วยข้อสอบ “ชุดทั้งห้อง”")
-    filled = forms.template_csv(exam).decode("utf-8-sig") + "1,นายเอ,ก,ค1,คำตอบ\n2,นางบี,,ข,\n"
-    imported = forms.parse_responses(exam, filled.encode("utf-8"))
+    filled = csv_import.template_csv(exam).decode("utf-8-sig") + "1,นายเอ,ก,ค1,คำตอบ\n2,นางบี,,ข,\n"
+    imported = csv_import.parse_responses(exam, filled.encode("utf-8"))
     at.session_state["class_session"] = class_session.merge_students(
         at.session_state["class_session"], imported.students)[0]
     at.run()
@@ -158,3 +158,38 @@ def test_class_tab_imports_and_grades_whole_class(app):
     # นายเอ: ข้อ 1 ถูก (1) + ข้อ 2 ตอบ ค (0) + เรียงความ (คะแนนเต็มข้อนี้ 1 จึงได้ไม่เกิน 1) = 2
     assert [(r["ชื่อ"], r["คะแนนรวม"], r["สถานะ"]) for r in rows] == [("นายเอ", 2, "ตรวจแล้ว"), ("นางบี", 0, "ตรวจแล้ว")]
     assert any("เฉลี่ย" in c.value for c in at.caption)
+
+
+def test_class_tab_requires_review_of_scanned_sheets_before_grading(app):
+    at = app
+    exam = Exam(title="ชุดกระดาษ", spec_summary="", concepts=["Supervised", "Overfitting"],
+                questions=[mcq(1), mcq(2), ESSAY])
+    at.session_state["exam"] = exam
+    at.run()
+    click(at, "เริ่มเก็บคำตอบทั้งห้องด้วยข้อสอบ “ชุดกระดาษ”")
+    clean = class_session.student_from_sheet(exam, "a.png", ExtractedAnswerSheet(
+        student_name="นายเอ", student_no="1", answers=[
+            ExtractedAnswer(question_id=1, answer="ก", choice_text="ก1", confidence="high", note=""),
+            ExtractedAnswer(question_id=2, answer="ก", choice_text="ก1", confidence="high", note=""),
+            ExtractedAnswer(question_id=3, answer="ตอบ", choice_text="", confidence="high", note=""),
+        ]))
+    flagged = class_session.student_from_sheet(exam, "b.png", ExtractedAnswerSheet(student_name="", student_no="", answers=[
+        ExtractedAnswer(question_id=1, answer="ข", choice_text="ค1", confidence="high", note=""),
+    ]))
+    at.session_state["class_session"] = class_session.merge_students(
+        at.session_state["class_session"], [clean, flagged])[0]
+    at.session_state["class_images"] = {"b.png": [_png()]}
+    at.run()
+    assert not at.exception, at.exception
+    assert not [b for b in at.button if b.label.startswith("ตรวจคำตอบที่ยังไม่ได้ตรวจ")]  # ยังไม่มีใครผ่านการตรวจทาน
+
+    click(at, "ยืนยันทุกคนที่ไม่มีคำเตือน (1 คน)")
+    assert any("ตัวอักษรที่อ่านได้" in w.value for w in at.warning)  # คำเตือนรายข้อของคนที่เหลือ
+    [t for t in at.text_input if t.label == "ชื่อ-นามสกุล"][0].set_value("นางบี")
+    click(at, "ยืนยันคำตอบของคนนี้")
+    students = at.session_state["class_session"].students
+    assert [s.reviewed for s in students] == [True, True]
+    assert (students[1].name, students[1].answers[1]) == ("นางบี", 1)
+
+    click(at, "ตรวจคำตอบที่ยังไม่ได้ตรวจ (2 คน)")
+    assert [r["สถานะ"] for r in class_session.score_rows(at.session_state["class_session"])] == ["ตรวจแล้ว", "ตรวจแล้ว"]

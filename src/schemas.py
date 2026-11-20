@@ -138,6 +138,7 @@ class ExtractedAnswer(BaseModel):
 
 class ExtractedAnswerSheet(BaseModel):
     student_name: str
+    student_no: str = Field(description="เลขที่หรือรหัสผู้สอบที่เขียนในกระดาษ ถ้าไม่มีให้ ''")
     answers: list[ExtractedAnswer]
 
 
@@ -192,8 +193,11 @@ class StudentRecord(BaseModel):
     student_no: str = ""  # เลขที่ / รหัสผู้สอบ (ถ้ามี)
     name: str
     answers: dict[int, Union[int, str, None]]  # ปรนัย = index ตัวเลือก, อัตนัย = ข้อความ, ไม่ได้ตอบ = None
-    source: Literal["google_forms", "csv"]
-    import_notes: list[str] = []  # คำเตือนตอนนำเข้า เช่น จับคู่ตัวเลือกไม่ได้
+    source: Literal["csv", "answer_sheet"]
+    import_notes: list[str] = []  # คำเตือนตอนนำเข้า เช่น จับคู่ตัวเลือกไม่ได้ / AI อ่านไม่ชัด
+    reviewed: bool = True  # คำตอบที่ AI อ่านจากกระดาษต้องให้ครูตรวจทานก่อนตรวจคะแนน
+    sheet_name: str = ""  # ไฟล์กระดาษคำตอบ (ใช้หาภาพตอนตรวจทาน)
+    extracted: Optional[ExtractedAnswerSheet] = None  # สิ่งที่ AI อ่านได้จากกระดาษ (ก่อนครูแก้)
     results: Optional[list[QuestionResult]] = None  # None = ยังไม่ได้ตรวจ
 
     @property
