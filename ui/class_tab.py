@@ -5,13 +5,13 @@
 
 import streamlit as st
 
-from src import answer_reader, class_session, csv_import, export, school_db, scoring
+from src import answer_reader, class_session, config, csv_import, export, school_db, scoring
 from src.class_session import normalize_no
 from src.llm import LLMError
 from src.schemas import OBJECTIVE_TYPES, TYPE_LABELS, ClassSession, Exam, StudentRecord
 
 from .answer_form import answer_fields, collect, prefill
-from .common import state, use_exam
+from .common import panel_text, show_panel, state, use_exam
 
 SHEETS = "สแกนกระดาษคำตอบ (PDF / รูปถ่าย)"
 CSV = "ไฟล์ CSV (กรอกคำตอบเอง)"
@@ -337,10 +337,7 @@ def grade_section(ready: bool) -> None:
     if pending:
         if st.button(f"ตรวจคำตอบที่ยังไม่ได้ตรวจ ({len(pending)} คน)", type="primary", disabled=needs_llm and not ready):
             grade_all(pending)
-        st.caption(
-            "ข้ออัตนัยใช้โมเดลตรวจทีละข้อ (Ollama ประมาณ 2–10 วินาทีต่อข้อต่อคน)" if needs_llm
-            else "ข้อสอบปรนัยล้วน ตรวจด้วยโค้ดทันที ไม่ต้องใช้โมเดล"
-        )
+        st.caption(grading_note(session.exam) if needs_llm else "ข้อสอบปรนัยล้วน ตรวจด้วยโค้ดทันที ไม่ต้องใช้โมเดล")
     if waiting:
         st.caption(f"ยังมี {len(waiting)} คนรอตรวจทาน — ต้องตรวจทานในขั้นที่ 3 ก่อนจึงจะตรวจคะแนนได้")
 
@@ -380,6 +377,13 @@ def grade_all(indices: list[int]) -> None:
     bar.progress(1.0, text=f"ตรวจครบ {len(indices)} คนแล้ว")
 
 
+def grading_note(exam: Exam) -> str:
+    note = "ข้ออัตนัยใช้โมเดลตรวจทีละข้อ (Ollama ประมาณ 2–10 วินาทีต่อข้อต่อคน)"
+    if config.GRADER_MODE == "panel" and any(q.type in config.PANEL_TYPES for q in exam.questions):
+        note += " · เรียงความใช้คณะผู้ตรวจ 3 คน (+ Moderator เมื่อเห็นต่าง) จึงใช้เวลาประมาณ 3 เท่า"
+    return note
+
+
 def show_student(exam: Exam, student: StudentRecord) -> None:
     st.caption(f"สถานะ: {class_session.status(student)} · ที่มา: "
                + ("กระดาษคำตอบ " + student.sheet_name if student.source == "answer_sheet" else "CSV"))
@@ -399,8 +403,13 @@ def show_student(exam: Exam, student: StudentRecord) -> None:
             "ชนิด": TYPE_LABELS[q.type],
             "คำตอบ": shown,
             "คะแนน": f"{r.points_awarded:g}/{r.max_points:g}" if r else f"–/{q.points:g}",
+            "คณะผู้ตรวจ": panel_text(r) if r else "",
         })
     st.dataframe(rows, hide_index=True)
+    for r in student.results or []:
+        if r.panel:
+            st.markdown(f"**ข้อ {r.question_id} (เรียงความ)**")
+            show_panel(r)
 
 
 # ---------------- ปิดการสอบ ----------------

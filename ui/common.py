@@ -5,8 +5,9 @@ from typing import Optional
 import streamlit as st
 
 from src.generation_graph import GenerationResult, run_generation
+from src.grading_graph import GRADER_LABELS
 from src.llm import LLMError
-from src.schemas import Exam
+from src.schemas import Exam, QuestionResult
 from src.sources import Source
 
 state = st.session_state
@@ -72,3 +73,28 @@ def run_with_progress(source: Source, **kwargs) -> Optional[GenerationResult]:
         status.update(label=f"สร้างข้อสอบเสร็จแล้ว ({sum(s.seconds for s in result.trace):.0f} วินาที)",
                       state="complete", expanded=False)
     return result
+
+
+def panel_text(result: QuestionResult) -> str:
+    """สรุปคณะผู้ตรวจแบบสั้นสำหรับตาราง เช่น "6 / 7 / 5 → ตรงกัน" """
+    panel = result.panel
+    if panel is None:
+        return ""
+    scores = " / ".join(f"{g.points:g}" for g in panel.grades)
+    text = f"{scores} → " + ("ตรงกัน" if panel.decision == "agreed" else "Moderator ตัดสิน")
+    return text + (" ⚠️ ให้ครูดู" if panel.needs_teacher else "")
+
+
+def show_panel(result: QuestionResult) -> None:
+    """ผลของคณะผู้ตรวจเรียงความ: คะแนนของแต่ละคน และสรุปอย่างไร"""
+    panel = result.panel
+    if panel is None:
+        return
+    scores = " · ".join(f"{GRADER_LABELS.get(g.grader, g.grader)} {g.points:g}" for g in panel.grades)
+    if panel.decision == "agreed":
+        st.caption(f"คณะผู้ตรวจ: {scores} — เห็นตรงกัน (ต่างกัน {panel.spread:g} คะแนน) ใช้ผลของผู้ตรวจที่ให้คะแนนกลาง")
+    else:
+        st.caption(f"คณะผู้ตรวจ: {scores} — เห็นต่าง {panel.spread:g} คะแนน จึงให้ Moderator ตัดสิน")
+        st.markdown(f"**Moderator ตัดสิน {result.points_awarded:g}/{result.max_points:g}:** {panel.rationale}")
+    if panel.needs_teacher:
+        st.warning("ผู้ตรวจให้คะแนนต่างกันมาก ควรให้ผู้สอนตรวจข้อนี้ซ้ำ")
