@@ -1,0 +1,32 @@
+# รันเทสต์อัตโนมัติทุกครั้งที่ push เข้า main หรือเปิด/อัปเดต Pull Request
+# เทสต์ใช้ LLM จำลองทั้งหมด จึงไม่ต้องมี Ollama หรือ API key
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]  # ต่ำสุดที่ README รองรับ และเวอร์ชันที่ใช้พัฒนา
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install browser for PDF tests
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run tests
+        run: python -m pytest -q
