@@ -14,10 +14,11 @@ import src.grader
 import src.llm
 import src.planner
 import src.reviewer
-from src import answer_reader
+from src import answer_reader, class_session, csv_import, school_db
 from src.schemas import (
-    CriterionScore, Exam, ExamReview, ExamSpec, ExtractedAnswer, ExtractedAnswerSheet, LearningReport, Question,
-    QuestionReview, RevisedQuestions, RubricCriterion, SectionSpec, SubjectiveGrade, WeakTopic,
+    ClassSession, CriterionScore, Exam, ExamReview, ExamSpec, ExtractedAnswer, ExtractedAnswerSheet, LearningReport,
+    Question, QuestionReview, RevisedQuestions, RosterEntry, RubricCriterion, SectionSpec, StudentRecord,
+    SubjectiveGrade, WeakTopic,
 )
 
 APP = str(Path(__file__).parent.parent / "app.py")
@@ -122,7 +123,7 @@ def test_uploaded_sheet_shows_review_warnings(app):
     at = app
     exam = Exam(title="ชุดทดสอบ", spec_summary="", concepts=["Supervised", "Overfitting"],
                 questions=[mcq(1), mcq(2), ESSAY])
-    extracted = ExtractedAnswerSheet(student_name="นางสาวทดสอบ", answers=[
+    extracted = ExtractedAnswerSheet(student_name="นางสาวทดสอบ", student_no="", answers=[
         ExtractedAnswer(question_id=1, answer="ข", choice_text="ค1", confidence="high", note=""),  # ตัวอักษรไม่ตรงข้อความ
         ExtractedAnswer(question_id=3, answer="คำตอบ", choice_text="", confidence="low", note="ลายมือไม่ชัด"),
     ])  # ข้อ 2 หายไป
@@ -137,3 +138,136 @@ def test_uploaded_sheet_shows_review_warnings(app):
     assert "ไม่ตรงกับข้อความตัวเลือก" in warnings
     assert "ไม่พบคำตอบข้อนี้ในไฟล์" in warnings
     assert "ลายมือไม่ชัด" in warnings
+
+
+def add_room(roster: list[RosterEntry] = ()) -> school_db.Classroom:
+    with school_db.connect() as conn:
+        room = school_db.add_classroom(conn, 2569, "ม.4", "1")
+        school_db.import_roster(conn, room.id, list(roster))
+    return room
+
+
+def start_class(at: AppTest, exam: Exam) -> None:
+    at.session_state["exam"] = exam
+    at.run()
+    click(at, f"เริ่มเก็บคำตอบทั้งห้องด้วยข้อสอบ “{exam.title}”")
+    assert at.session_state["class_sitting"].classroom.name == "ม.4/1"
+
+
+def test_class_tab_imports_and_grades_whole_class(app):
+    at = app
+    exam = Exam(title="ชุดทั้งห้อง", spec_summary="", concepts=["Supervised", "Overfitting"],
+                questions=[mcq(1), mcq(2), ESSAY])
+    room = add_room()
+    start_class(at, exam)
+    filled = csv_import.template_csv(exam).decode("utf-8-sig") + "1,นายเอ,ก,ค1,คำตอบ\n2,นางบี,,ข,\n"
+    imported = csv_import.parse_responses(exam, filled.encode("utf-8"))
+    at.session_state["class_session"] = class_session.merge_students(
+        at.session_state["class_session"], imported.students)[0]
+    at.run()
+    assert not at.exception, at.exception
+
+    click(at, "ตรวจคำตอบที่ยังไม่ได้ตรวจ (2 คน)")
+    rows = class_session.score_rows(at.session_state["class_session"])
+    # นายเอ: ข้อ 1 ถูก (1) + ข้อ 2 ตอบ ค (0) + เรียงความ (คะแนนเต็มข้อนี้ 1 จึงได้ไม่เกิน 1) = 2
+    assert [(r["ชื่อ"], r["คะแนนรวม"], r["สถานะ"]) for r in rows] == [("นายเอ", 2, "ตรวจแล้ว"), ("นางบี", 0, "ตรวจแล้ว")]
+    assert any("เฉลี่ย" in c.value for c in at.caption)
+    with school_db.connect() as conn:  # บันทึกลงฐานข้อมูลแล้ว
+        table = school_db.classroom_table(conn, room.id)
+    assert [(r["ชื่อ"], r["เฉลี่ย"]) for r in table] == [("นายเอ", 66.7), ("นางบี", 0.0)]  # 2 จาก 3 คะแนน
+
+    click(at, "ปิดการสอบนี้ (เปิดกลับมาได้จากรายการการสอบที่บันทึกไว้)")
+    assert at.session_state["class_session"] is None
+    click(at, "เปิดการสอบนี้")
+    assert [s.name for s in at.session_state["class_session"].students if s.results] == ["นายเอ", "นางบี"]
+
+
+def test_class_tab_requires_review_of_scanned_sheets_before_grading(app):
+    at = app
+    exam = Exam(title="ชุดกระดาษ", spec_summary="", concepts=["Supervised", "Overfitting"],
+                questions=[mcq(1), mcq(2), ESSAY])
+    add_room()  # ไม่มีรายชื่อ = ครูพิมพ์ชื่อเอง
+    start_class(at, exam)
+    clean = class_session.student_from_sheet(exam, "a.png", ExtractedAnswerSheet(
+        student_name="นายเอ", student_no="1", answers=[
+            ExtractedAnswer(question_id=1, answer="ก", choice_text="ก1", confidence="high", note=""),
+            ExtractedAnswer(question_id=2, answer="ก", choice_text="ก1", confidence="high", note=""),
+            ExtractedAnswer(question_id=3, answer="ตอบ", choice_text="", confidence="high", note=""),
+        ]))
+    flagged = class_session.student_from_sheet(exam, "b.png", ExtractedAnswerSheet(student_name="", student_no="", answers=[
+        ExtractedAnswer(question_id=1, answer="ข", choice_text="ค1", confidence="high", note=""),
+    ]))
+    at.session_state["class_session"] = class_session.merge_students(
+        at.session_state["class_session"], [clean, flagged])[0]
+    at.session_state["class_images"] = {"b.png": [_png()]}
+    at.run()
+    assert not at.exception, at.exception
+    assert not [b for b in at.button if b.label.startswith("ตรวจคำตอบที่ยังไม่ได้ตรวจ")]  # ยังไม่มีใครผ่านการตรวจทาน
+
+    click(at, "ยืนยันทุกคนที่ไม่มีคำเตือน (1 คน)")
+    assert any("ตัวอักษรที่อ่านได้" in w.value for w in at.warning)  # คำเตือนรายข้อของคนที่เหลือ
+    [t for t in at.text_input if t.label == "ชื่อ-นามสกุล"][0].set_value("นางบี")
+    click(at, "ยืนยันคำตอบของคนนี้")
+    students = at.session_state["class_session"].students
+    assert [s.reviewed for s in students] == [True, True]
+    assert (students[1].name, students[1].answers[1]) == ("นางบี", 1)
+
+    click(at, "ตรวจคำตอบที่ยังไม่ได้ตรวจ (2 คน)")
+    assert [r["สถานะ"] for r in class_session.score_rows(at.session_state["class_session"])] == ["ตรวจแล้ว", "ตรวจแล้ว"]
+
+
+def test_review_with_roster_picks_student_from_list(app):
+    at = app
+    exam = Exam(title="ชุดรายชื่อ", spec_summary="", concepts=["Supervised"], questions=[mcq(1)])
+    add_room([RosterEntry(number="1", name="นายเอ"), RosterEntry(number="2", name="นางสาวบี")])
+    start_class(at, exam)
+    sheets = [
+        class_session.student_from_sheet(exam, "a.png", ExtractedAnswerSheet(student_name="นายเอ", student_no="1", answers=[
+            ExtractedAnswer(question_id=1, answer="ก", choice_text="ก1", confidence="high", note="")])),
+        class_session.student_from_sheet(exam, "b.png", ExtractedAnswerSheet(student_name="", student_no="", answers=[
+            ExtractedAnswer(question_id=1, answer="ข", choice_text="ข1", confidence="high", note="")])),
+    ]
+    roster = {"1": "นายเอ", "2": "นางสาวบี"}
+    at.session_state["class_session"] = class_session.merge_students(
+        at.session_state["class_session"], class_session.apply_roster(sheets, roster))[0]
+    at.run()
+    assert not at.exception, at.exception
+    assert any("ยังไม่มีคำตอบ 1 คน: เลขที่ 2" in c.value for c in at.caption)
+
+    [s for s in at.selectbox if s.label == "เลือกผู้สอบที่จะตรวจทาน"][0].set_value(1).run()
+    picker = [s for s in at.selectbox if s.label == "ผู้สอบ (จากรายชื่อห้อง)"][0]
+    assert picker.value is None  # ไม่มีเลขที่ ต้องเลือกเอง
+    picker.set_value("1")
+    click(at, "ยืนยันคำตอบของคนนี้")
+    assert any("มีคำตอบของ “นายเอ” อยู่แล้ว" in e.value for e in at.error)  # เลขที่ซ้ำกับใบอื่น
+
+    [s for s in at.selectbox if s.label == "ผู้สอบ (จากรายชื่อห้อง)"][0].set_value("2")
+    click(at, "ยืนยันคำตอบของคนนี้")
+    student = at.session_state["class_session"].students[1]
+    assert (student.student_no, student.name, student.reviewed) == ("2", "นางสาวบี", True)
+
+
+def test_school_tab_adds_room_and_shows_scores(app):
+    at = app
+    fields = {t.label: t for t in at.text_input if t.label in ("ชั้น", "ห้อง")}
+    fields["ชั้น"].set_value("ม.4")
+    fields["ห้อง"].set_value("2")
+    click(at, "เพิ่มห้อง")
+    with school_db.connect() as conn:
+        [room] = school_db.classrooms(conn)
+        exam = Exam(title="ชุดแท็บห้า", spec_summary="", concepts=["Supervised"], questions=[mcq(1)])
+        student = StudentRecord(student_no="1", name="เอ", answers={1: 0}, source="csv")
+        session = ClassSession(exam=exam, students=[class_session.grade_student(exam, student)])
+        school_db.save_session(conn, school_db.open_sitting(conn, exam, room.id, 1), session)
+    assert room.name == "ม.4/2" and at.session_state["school_room"] == room.id
+
+    for view in ("รายห้อง", "รายชั้น"):
+        [r for r in at.radio if r.label == "ดูคะแนน"][0].set_value(view).run()
+        assert not at.exception, at.exception
+        assert any("ชุดแท็บห้า" in str(d.value) for d in at.dataframe)
+    [r for r in at.radio if r.label == "ดูคะแนน"][0].set_value("รายคน").run()
+    [s for s in at.selectbox if s.label == "นักเรียน"][0].set_value(0).run()
+    assert any("ชุดแท็บห้า" in str(d.value) for d in at.dataframe)
+
+    click(at, "สร้างไฟล์สำรอง")
+    assert at.session_state["school_backup"].startswith(b"SQLite format 3")

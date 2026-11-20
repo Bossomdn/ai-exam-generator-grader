@@ -6,6 +6,7 @@ import streamlit as st
 
 from src.generation_graph import GenerationResult, run_generation
 from src.llm import LLMError
+from src.schemas import Exam
 from src.sources import Source
 
 state = st.session_state
@@ -17,6 +18,18 @@ DEFAULTS = {
     "results": None, "mastery": None, "report": None, "notice": None,
     "files": {},  # ไฟล์ PDF ที่สร้างแล้ว {"exam" | "key" | "report": bytes}
     "sheet": None,  # กระดาษคำตอบที่อัปโหลด {"version", "file": AnswerSheetFile, "result": ExtractedAnswerSheet}
+    # โหมดครู (แท็บ 4): ข้อมูลทั้งห้องผูกกับข้อสอบของตัวเอง จึงไม่ถูกล้างเมื่อสร้างข้อสอบชุดใหม่
+    "class_session": None,  # ClassSession (บันทึกลงฐานข้อมูลทุกครั้งที่เปลี่ยน)
+    "class_sitting": None,  # school_db.Sitting: การสอบนี้คือห้องไหน ภาคเรียนอะไร
+    "class_import": None,  # สรุปการนำเข้าครั้งล่าสุด
+    "class_upload_n": 0,  # เปลี่ยน key ของช่องอัปโหลดเพื่อล้างไฟล์หลังนำเข้าแล้ว
+    "class_review_n": 0,  # เปลี่ยน key ของฟอร์มตรวจทานเมื่อข้อมูลห้องเปลี่ยน (กันค่าเก่าค้าง)
+    "class_images": {},  # ภาพกระดาษคำตอบ {sheet_name: [PNG]} (ไม่บันทึกลงฐานข้อมูล เพราะใหญ่)
+    "class_exam_pdf": None,  # PDF ข้อสอบของห้องนี้สำหรับพิมพ์
+    # แท็บ 5: ห้องเรียนและคะแนน
+    "school_notice": None,  # (ข้อความสำเร็จ, [คำเตือน]) จากการนำเข้ารายชื่อ / กู้คืน
+    "school_upload_n": 0,
+    "school_backup": None,  # ไฟล์สำรองฐานข้อมูลที่สร้างแล้ว (bytes)
 }
 
 
@@ -26,12 +39,18 @@ def init_state() -> None:
 
 
 def set_exam(result: GenerationResult, source: Source) -> None:
-    """ใช้ข้อสอบชุดใหม่ และล้างผลของชุดเก่าทั้งหมด"""
-    state.exam = result.exam
-    state.source = source
+    """ใช้ข้อสอบชุดใหม่จากกราฟสร้างข้อสอบ"""
+    use_exam(result.exam, source)
     state.quality = {q.question_id: q for q in result.quality}
     state.trace = result.trace
     state.rounds = result.rounds
+
+
+def use_exam(exam: Exam, source: Optional[Source] = None) -> None:
+    """ใช้ข้อสอบชุดใหม่ และล้างผลของชุดเก่าทั้งหมด (เช่น ข้อสอบจากไฟล์ข้อมูลห้องที่เปิดมา)"""
+    state.exam = exam
+    state.source = source
+    state.quality, state.trace, state.rounds = {}, [], 0
     state.version += 1
     state.results = state.mastery = state.report = None
     state.files = {}

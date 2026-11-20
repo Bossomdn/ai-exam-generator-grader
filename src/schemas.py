@@ -5,7 +5,7 @@
 ทุกฟิลด์เป็น required (ฟิลด์ที่ไม่เกี่ยวกับชนิดข้อนั้นให้เป็น list ว่าง / null)
 """
 
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -138,6 +138,7 @@ class ExtractedAnswer(BaseModel):
 
 class ExtractedAnswerSheet(BaseModel):
     student_name: str
+    student_no: str = Field(description="เลขที่หรือรหัสผู้สอบที่เขียนในกระดาษ ถ้าไม่มีให้ ''")
     answers: list[ExtractedAnswer]
 
 
@@ -184,3 +185,35 @@ class LearningReport(BaseModel):
     answer_writing_tips: list[str] = Field(description="คำแนะนำการเขียนตอบอัตนัย ถ้ามี")
     study_plan: list[str]
     practice_prompt: str = Field(description="คำสั่งสำหรับสร้างแบบฝึกชุดใหม่ที่เน้นหัวข้อที่อ่อน")
+
+
+# ---------- ข้อมูลทั้งห้อง (โหมดครู: โค้ดสร้าง ไม่ใช่ LLM) ----------
+
+class StudentRecord(BaseModel):
+    student_no: str = ""  # เลขที่ / รหัสผู้สอบ (ถ้ามี)
+    name: str
+    answers: dict[int, Union[int, str, None]]  # ปรนัย = index ตัวเลือก, อัตนัย = ข้อความ, ไม่ได้ตอบ = None
+    source: Literal["csv", "answer_sheet"]
+    import_notes: list[str] = []  # คำเตือนตอนนำเข้า เช่น จับคู่ตัวเลือกไม่ได้ / AI อ่านไม่ชัด
+    reviewed: bool = True  # คำตอบที่ AI อ่านจากกระดาษต้องให้ครูตรวจทานก่อนตรวจคะแนน
+    sheet_name: str = ""  # ไฟล์กระดาษคำตอบ (ใช้หาภาพตอนตรวจทาน)
+    extracted: Optional[ExtractedAnswerSheet] = None  # สิ่งที่ AI อ่านได้จากกระดาษ (ก่อนครูแก้)
+    results: Optional[list[QuestionResult]] = None  # None = ยังไม่ได้ตรวจ
+
+    @property
+    def key(self) -> str:
+        """ใช้ระบุตัวผู้สอบตอนนำเข้าซ้ำ: เลขที่ถ้ามี ไม่งั้นใช้ชื่อ"""
+        return self.student_no.strip() or self.name.strip()
+
+
+class ClassSession(BaseModel):
+    """การสอบ 1 ครั้งของห้องหนึ่ง (บันทึกลงฐานข้อมูลทุกครั้งที่เปลี่ยน ดู src/school_db.py)"""
+    exam: Exam
+    students: list[StudentRecord] = []
+
+
+class RosterEntry(BaseModel):
+    """นักเรียน 1 คนในรายชื่อห้อง"""
+    number: str  # เลขที่
+    name: str
+    code: str = ""  # รหัสนักเรียน (ใช้เชื่อมคนเดิมข้ามปีการศึกษา) ไม่มีได้

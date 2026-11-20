@@ -80,3 +80,27 @@ def test_bad_files_raise_sheet_error():
         answer_reader.load_answer_sheet("broken.pdf", b"not a pdf")
     with pytest.raises(answer_reader.SheetError):
         answer_reader.load_answer_sheet("broken.png", b"not an image")
+
+
+def _multipage_pdf(pages: int) -> bytes:
+    images = [Image.new("RGB", (200, 280), "white") for _ in range(pages)]
+    buf = io.BytesIO()
+    images[0].save(buf, format="PDF", save_all=True, append_images=images[1:])
+    return buf.getvalue()
+
+
+def test_split_whole_class_pdf_into_students():
+    sheets = answer_reader.split_pdf("ห้อง 5-1.pdf", _multipage_pdf(6), pages_per_student=2)
+    assert [s.name for s in sheets] == ["ห้อง 5-1 คนที่ 1", "ห้อง 5-1 คนที่ 2", "ห้อง 5-1 คนที่ 3"]
+    assert all(s.pages == 2 and len(s.images) == 2 for s in sheets)
+    with pytest.raises(answer_reader.SheetError, match="ไม่ลงตัว"):
+        answer_reader.split_pdf("x.pdf", _multipage_pdf(5), pages_per_student=2)
+
+
+def test_review_warning_covers_each_reason():
+    assert "ไม่พบคำตอบ" in answer_reader.review_warning(MCQ, None)
+    assert "จับคู่กับตัวเลือกไม่ได้" in answer_reader.review_warning(MCQ, ans("จ"))
+    assert "อาจอ่านเครื่องหมายผิด" in answer_reader.review_warning(MCQ, ans("ค", "Unsupervised"))
+    low = ExtractedAnswer(question_id=1, answer="ข", choice_text="", confidence="low", note="เลือน")
+    assert answer_reader.review_warning(MCQ, low) == "อ่านไม่ค่อยออก — เลือน · กรุณาตรวจทาน"
+    assert answer_reader.review_warning(MCQ, ans("ข", "Unsupervised")) is None
