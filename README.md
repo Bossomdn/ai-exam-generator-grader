@@ -148,14 +148,90 @@ streamlit run app.py
 ### โครงสร้างโปรเจกต์
 
 ```
-app.py             หน้าเว็บ Streamlit (3 แท็บ: สร้างข้อสอบ / ทำข้อสอบ / ผลและคำแนะนำ)
+app.py             โครงหน้าเว็บ Streamlit (เรียกแต่ละแท็บจาก ui/)
+ui/                หน้าจอแยกไฟล์ละแท็บ: create_tab (สร้างข้อสอบ) / take_tab (ทำข้อสอบ) / result_tab (ผลและคำแนะนำ) / sidebar
 src/               agent และส่วนประกอบทั้งหมด (ดูตาราง "การทำงานของแต่ละส่วน")
-tests/             เทสต์ pytest (ใช้ LLM จำลอง ไม่ต้องมีโมเดล)
+tests/             เทสต์ pytest (ใช้ LLM จำลอง ไม่ต้องมีโมเดล) รวมเทสต์หน้าเว็บด้วย Streamlit AppTest
 samples/           เนื้อหาตัวอย่าง: Machine Learning เบื้องต้น 7 สไลด์
 assets/fonts/      ฟอนต์ Sarabun สำหรับ PDF ภาษาไทย
+.github/           GitHub Actions (รันเทสต์อัตโนมัติ) และแบบฟอร์ม Pull Request
 .env.example       ตัวอย่างค่าตั้ง (คัดลอกเป็น .env)
 requirements.txt   รายการแพ็กเกจ Python
 ```
+
+## ทำงานร่วมกันเป็นกลุ่ม
+
+### กติกา
+- **ห้าม push ตรงเข้า `main`** ทุกงานทำบน branch ของตัวเอง แล้วเปิด Pull Request (PR) ให้เพื่อนรีวิวอย่างน้อย 1 คนก่อน merge
+- **`main` ต้องรันได้และเทสต์ผ่านเสมอ** GitHub Actions รัน `pytest` ให้อัตโนมัติทุก PR (ดูที่แท็บ Checks ของ PR) ถ้าขึ้นสีแดงต้องแก้ก่อน merge
+- **PR เล็กและบ่อย** ดีกว่า PR ใหญ่ครั้งเดียว รีวิวง่ายและชนกันน้อย
+- **ห้าม commit** ไฟล์ `.env`, API key หรือข้อมูลนักเรียนจริง (เก็บไว้ในโฟลเดอร์ `data/` ซึ่งอยู่ใน `.gitignore`)
+
+### ขั้นตอนทำงาน 1 ชิ้น
+
+```bash
+# 1. เริ่มจาก main ล่าสุด แล้วแตก branch ใหม่
+git checkout main
+git pull
+git checkout -b feature/grading-panel
+
+# 2. เขียนโค้ด แล้ว commit เป็นระยะ
+git add src/grading_graph.py tests/test_grading_graph.py
+git commit -m "Add essay grader panel with moderator"
+
+# 3. ระหว่างทำ ดึงงานล่าสุดของเพื่อนจาก main มารวมเป็นระยะ
+git fetch origin
+git merge origin/main
+
+# 4. ก่อนเปิด PR รันเทสต์ในเครื่อง
+python -m pytest
+
+# 5. ส่ง branch ขึ้น GitHub
+git push -u origin feature/grading-panel
+```
+
+6. เปิดหน้า repo บน GitHub กด **Compare & pull request** กรอกตามแบบฟอร์ม แล้วเลือกเพื่อนเป็น Reviewer
+7. รีวิวผ่าน + Checks เป็นสีเขียว → กด **Squash and merge** แล้วลบ branch
+8. กลับมาที่ main ในเครื่อง: `git checkout main && git pull`
+
+### ตั้งชื่อ branch
+
+| ขึ้นต้นด้วย | ใช้เมื่อ | ตัวอย่าง |
+|---|---|---|
+| `feature/` | เพิ่มความสามารถใหม่ | `feature/grading-panel` |
+| `fix/` | แก้บั๊ก | `fix/pdf-thai-marks` |
+| `eval/` | สคริปต์ประเมินผล / การทดลอง | `eval/essay-qwk` |
+| `docs/` | เอกสาร รายงาน สไลด์ | `docs/report` |
+| `chore/` | จัดระเบียบโค้ด ตั้งค่าโปรเจกต์ | `chore/team-setup` |
+
+### แบ่งงานตาม roadmap
+
+| branch | งาน | ต้องรอ |
+|---|---|---|
+| `feature/grading-panel` | คณะผู้ตรวจเรียงความ 3 คน + Moderator บน LangGraph | – |
+| `feature/google-forms` | ส่งออก Google Form + นำเข้าผลตอบ CSV + ข้อมูลทั้งห้อง | – |
+| `feature/item-analysis` | สถิติข้อสอบ + Item Analyst + ปรับปรุงข้อสอบจากผลจริง | google-forms |
+| `feature/teacher-review` | คิวตรวจของครู + ปรับตามมาตรฐานครู | grading-panel |
+| `eval/...` | สคริปต์ประเมินผลและเก็บข้อมูลจริง | grading-panel, item-analysis |
+| `docs/report` | รายงาน / สไลด์ | – |
+
+### ไฟล์ที่ต้องระวังชนกัน
+- **หน้าเว็บ:** แยกไฟล์ละแท็บใน `ui/` แล้ว หน้าจอใหม่ (เช่น โหมดครู) ให้สร้างไฟล์ใหม่ใน `ui/` แล้วเพิ่มแค่ 2–3 บรรทัดใน `app.py`
+- **`src/schemas.py`, `src/config.py`:** ทุกส่วนใช้ร่วมกัน ให้เพิ่มของใหม่ต่อท้ายไฟล์ และอย่าย้าย/เปลี่ยนชื่อของเดิมปนกับงานอื่นใน PR เดียวกัน
+- **`requirements.txt`:** ถ้าเพิ่มแพ็กเกจ บอกในกลุ่มด้วย เพื่อนต้อง `pip install -r requirements.txt` ใหม่
+- **เทสต์:** โมดูลใหม่ใน `src/` ควรมีเทสต์ใน `tests/` ที่ใช้ LLM จำลอง (ดูตัวอย่างใน `tests/test_generation_graph.py`) เพราะ GitHub Actions ไม่มีโมเดลจริง
+
+### ถ้า merge แล้วเกิด conflict
+Git จะใส่เครื่องหมาย `<<<<<<<`, `=======`, `>>>>>>>` ในไฟล์ที่ชนกัน
+1. เปิดไฟล์นั้นใน VS Code แล้วกด **Accept Current / Incoming / Both** ตามที่ถูกต้อง (ถ้าไม่แน่ใจ ถามเจ้าของโค้ดส่วนนั้น)
+2. บันทึกไฟล์ แล้วรัน `python -m pytest`
+3. `git add <ไฟล์>` และ `git commit`
+
+### สำหรับเจ้าของ repo (ตั้งครั้งเดียว)
+1. **Settings → Collaborators → Add people** เพื่อเพิ่มเพื่อนในกลุ่ม
+2. **Settings → Branches → Add rule** (หรือ **Rules → Rulesets**) สำหรับ `main`
+   - เปิด **Require a pull request before merging** (Required approvals = 1)
+   - เปิด **Require status checks to pass** แล้วเลือก `pytest (3.10)` และ `pytest (3.12)` (จะเลือกได้หลัง GitHub Actions รันครั้งแรกแล้ว)
 
 ## วิธีใช้
 
@@ -205,6 +281,7 @@ flowchart TD
 
 | ส่วน | ไฟล์ | ใช้ LLM? |
 |---|---|---|
+| หน้าเว็บ (แยกไฟล์ละแท็บ) | `app.py`, `ui/*.py` | – |
 | อ่านเนื้อหา (PPTX รายสไลด์ + โน้ต, PDF, TXT, หัวข้อ) | `src/sources.py` | ไม่ |
 | ลำดับการทำงานของ agent ฝั่งสร้างข้อสอบ (StateGraph + ลูปแก้) | `src/generation_graph.py` | – |
 | แปลงคำสั่งเป็นสเปกข้อสอบ | `src/planner.py` | ใช่ (effort low) |
