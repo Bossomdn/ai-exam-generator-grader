@@ -5,7 +5,7 @@
 ทุกฟิลด์เป็น required (ฟิลด์ที่ไม่เกี่ยวกับชนิดข้อนั้นให้เป็น list ว่าง / null)
 """
 
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -184,3 +184,25 @@ class LearningReport(BaseModel):
     answer_writing_tips: list[str] = Field(description="คำแนะนำการเขียนตอบอัตนัย ถ้ามี")
     study_plan: list[str]
     practice_prompt: str = Field(description="คำสั่งสำหรับสร้างแบบฝึกชุดใหม่ที่เน้นหัวข้อที่อ่อน")
+
+
+# ---------- ข้อมูลทั้งห้อง (โหมดครู: โค้ดสร้าง ไม่ใช่ LLM) ----------
+
+class StudentRecord(BaseModel):
+    student_no: str = ""  # เลขที่ / รหัสผู้สอบ (ถ้ามี)
+    name: str
+    answers: dict[int, Union[int, str, None]]  # ปรนัย = index ตัวเลือก, อัตนัย = ข้อความ, ไม่ได้ตอบ = None
+    source: Literal["google_forms", "csv"]
+    import_notes: list[str] = []  # คำเตือนตอนนำเข้า เช่น จับคู่ตัวเลือกไม่ได้
+    results: Optional[list[QuestionResult]] = None  # None = ยังไม่ได้ตรวจ
+
+    @property
+    def key(self) -> str:
+        """ใช้ระบุตัวผู้สอบตอนนำเข้าซ้ำ: เลขที่ถ้ามี ไม่งั้นใช้ชื่อ"""
+        return self.student_no.strip() or self.name.strip()
+
+
+class ClassSession(BaseModel):
+    format_version: int = 1
+    exam: Exam
+    students: list[StudentRecord] = []

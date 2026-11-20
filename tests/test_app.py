@@ -14,7 +14,7 @@ import src.grader
 import src.llm
 import src.planner
 import src.reviewer
-from src import answer_reader
+from src import answer_reader, class_session, forms
 from src.schemas import (
     CriterionScore, Exam, ExamReview, ExamSpec, ExtractedAnswer, ExtractedAnswerSheet, LearningReport, Question,
     QuestionReview, RevisedQuestions, RubricCriterion, SectionSpec, SubjectiveGrade, WeakTopic,
@@ -137,3 +137,24 @@ def test_uploaded_sheet_shows_review_warnings(app):
     assert "ไม่ตรงกับข้อความตัวเลือก" in warnings
     assert "ไม่พบคำตอบข้อนี้ในไฟล์" in warnings
     assert "ลายมือไม่ชัด" in warnings
+
+
+def test_class_tab_imports_and_grades_whole_class(app):
+    at = app
+    exam = Exam(title="ชุดทั้งห้อง", spec_summary="", concepts=["Supervised", "Overfitting"],
+                questions=[mcq(1), mcq(2), ESSAY])
+    at.session_state["exam"] = exam
+    at.run()
+    click(at, "เริ่มเก็บคำตอบทั้งห้องด้วยข้อสอบ “ชุดทั้งห้อง”")
+    filled = forms.template_csv(exam).decode("utf-8-sig") + "1,นายเอ,ก,ค1,คำตอบ\n2,นางบี,,ข,\n"
+    imported = forms.parse_responses(exam, filled.encode("utf-8"))
+    at.session_state["class_session"] = class_session.merge_students(
+        at.session_state["class_session"], imported.students)[0]
+    at.run()
+    assert not at.exception, at.exception
+
+    click(at, "ตรวจคำตอบที่ยังไม่ได้ตรวจ (2 คน)")
+    rows = class_session.score_rows(at.session_state["class_session"])
+    # นายเอ: ข้อ 1 ถูก (1) + ข้อ 2 ตอบ ค (0) + เรียงความ (คะแนนเต็มข้อนี้ 1 จึงได้ไม่เกิน 1) = 2
+    assert [(r["ชื่อ"], r["คะแนนรวม"], r["สถานะ"]) for r in rows] == [("นายเอ", 2, "ตรวจแล้ว"), ("นางบี", 0, "ตรวจแล้ว")]
+    assert any("เฉลี่ย" in c.value for c in at.caption)

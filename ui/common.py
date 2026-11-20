@@ -6,6 +6,7 @@ import streamlit as st
 
 from src.generation_graph import GenerationResult, run_generation
 from src.llm import LLMError
+from src.schemas import Exam
 from src.sources import Source
 
 state = st.session_state
@@ -17,6 +18,10 @@ DEFAULTS = {
     "results": None, "mastery": None, "report": None, "notice": None,
     "files": {},  # ไฟล์ PDF ที่สร้างแล้ว {"exam" | "key" | "report": bytes}
     "sheet": None,  # กระดาษคำตอบที่อัปโหลด {"version", "file": AnswerSheetFile, "result": ExtractedAnswerSheet}
+    # โหมดครู (แท็บ 4): ข้อมูลทั้งห้องผูกกับข้อสอบของตัวเอง จึงไม่ถูกล้างเมื่อสร้างข้อสอบชุดใหม่
+    "class_session": None,  # ClassSession
+    "class_import": None,  # สรุปการนำเข้าครั้งล่าสุด
+    "class_upload_n": 0,  # เปลี่ยน key ของช่องอัปโหลดเพื่อล้างไฟล์หลังนำเข้าแล้ว
 }
 
 
@@ -26,12 +31,18 @@ def init_state() -> None:
 
 
 def set_exam(result: GenerationResult, source: Source) -> None:
-    """ใช้ข้อสอบชุดใหม่ และล้างผลของชุดเก่าทั้งหมด"""
-    state.exam = result.exam
-    state.source = source
+    """ใช้ข้อสอบชุดใหม่จากกราฟสร้างข้อสอบ"""
+    use_exam(result.exam, source)
     state.quality = {q.question_id: q for q in result.quality}
     state.trace = result.trace
     state.rounds = result.rounds
+
+
+def use_exam(exam: Exam, source: Optional[Source] = None) -> None:
+    """ใช้ข้อสอบชุดใหม่ และล้างผลของชุดเก่าทั้งหมด (เช่น ข้อสอบจากไฟล์ข้อมูลห้องที่เปิดมา)"""
+    state.exam = exam
+    state.source = source
+    state.quality, state.trace, state.rounds = {}, [], 0
     state.version += 1
     state.results = state.mastery = state.report = None
     state.files = {}
