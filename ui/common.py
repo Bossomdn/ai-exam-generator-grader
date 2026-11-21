@@ -1,4 +1,4 @@
-"""สถานะของแอป (st.session_state) และฟังก์ชันที่หลายแท็บใช้ร่วมกัน"""
+"""สถานะของแอป (st.session_state) และฟังก์ชันที่หลายหน้าใช้ร่วมกัน"""
 
 from typing import Callable, Optional
 
@@ -15,30 +15,46 @@ state = st.session_state
 DEFAULTS = {
     "source": None, "exam": None, "version": 0,
     "plan": None,  # สเปกจาก Request Planner ที่รอผู้ใช้ยืนยัน {"key", "spec", "step", "n"}
+    "plan_n": 0,  # นับรอบที่วิเคราะห์คำสั่ง ใช้เป็น key ของช่องสเปก (ค่าใหม่ไม่ปนกับรอบก่อน)
+    "create_open": False,  # เปิดฟอร์มสร้างข้อสอบชุดใหม่ (เมื่อมีข้อสอบอยู่แล้ว ฟอร์มซ่อนไว้)
+    "uploaded_source": None,  # เนื้อหาจากไฟล์ที่อัปโหลด (ช่องอัปโหลดว่างเมื่อสลับหน้า จึงจำไว้ที่นี่)
     "quality": {}, "trace": [], "rounds": 0,  # ผลตรวจคุณภาพรายข้อ และบันทึกการทำงานของ agent
     "results": None, "mastery": None, "report": None, "notice": None,
     "files": {},  # ไฟล์ PDF ที่สร้างแล้ว {"exam" | "key" | "report": bytes}
     "sheet": None,  # กระดาษคำตอบที่อัปโหลด {"version", "file": AnswerSheetFile, "result": ExtractedAnswerSheet}
-    # โหมดครู (แท็บ 4): ข้อมูลทั้งห้องผูกกับข้อสอบของตัวเอง จึงไม่ถูกล้างเมื่อสร้างข้อสอบชุดใหม่
+    # หน้าสอบทั้งห้อง: ข้อมูลทั้งห้องผูกกับข้อสอบของตัวเอง จึงไม่ถูกล้างเมื่อสร้างข้อสอบชุดใหม่
     "class_session": None,  # ClassSession (บันทึกลงฐานข้อมูลทุกครั้งที่เปลี่ยน)
     "class_sitting": None,  # school_db.Sitting: การสอบนี้คือห้องไหน ภาคเรียนอะไร
     "class_import": None,  # สรุปการนำเข้าครั้งล่าสุด
+    "class_graded": None,  # ข้อความหลังตรวจเสร็จ แสดงครั้งเดียวในขั้นตรวจคะแนน
     "class_upload_n": 0,  # เปลี่ยน key ของช่องอัปโหลดเพื่อล้างไฟล์หลังนำเข้าแล้ว
     "class_review_n": 0,  # เปลี่ยน key ของฟอร์มตรวจทานเมื่อข้อมูลห้องเปลี่ยน (กันค่าเก่าค้าง)
     "class_images": {},  # ภาพกระดาษคำตอบ {sheet_name: [PNG]} (ไม่บันทึกลงฐานข้อมูล เพราะใหญ่)
     "class_exam_pdf": None,  # PDF ข้อสอบของห้องนี้สำหรับพิมพ์
     "item_report": None,  # ผลของ Item Analyst {"key", "report", "seconds"} (key บอกว่าวิเคราะห์จากข้อมูลชุดไหน)
     "item_revision": None,  # ข้อสอบฉบับปรับปรุงจากผลสอบจริง {"key", "result": GenerationResult, "source"}
-    # แท็บ 5: ห้องเรียนและคะแนน
-    "school_notice": None,  # (ข้อความสำเร็จ, [คำเตือน]) จากการนำเข้ารายชื่อ / กู้คืน
+    # หน้าห้องเรียน / คะแนน / สำรองข้อมูล
+    "school_notice": None,  # (ข้อความสำเร็จ, [คำเตือน]) จากการเพิ่มห้อง / นำเข้ารายชื่อ / กู้คืน
+    "school_error": None,  # ข้อผิดพลาดจากการเพิ่มห้อง (แสดงใต้ฟอร์ม)
     "school_upload_n": 0,
     "school_backup": None,  # ไฟล์สำรองฐานข้อมูลที่สร้างแล้ว (bytes)
 }
+# ช่องกรอกที่ต้องจำค่าไว้เมื่อสลับหน้า (Streamlit ลบค่าของช่องที่ไม่ได้แสดงในรอบนั้นทิ้ง)
+# ใช้ได้เฉพาะช่องข้อความ / ตัวเลือก — ช่องอัปโหลดไฟล์และตารางแก้ไขตั้งค่าผ่าน session_state ไม่ได้
+KEEP_KEYS = ("source_mode", "source_topic", "create_prompt", "answer_mode", "student_name")
+KEEP_PREFIXES = ("ans_", "spec_title_", "spec_focus_", "spec_concepts_")
 
 
 def init_state() -> None:
     for key, default in DEFAULTS.items():
         state.setdefault(key, default)
+
+
+def keep_inputs() -> None:
+    """เรียกทุกรอบก่อนแสดงหน้า: กำหนดค่าเดิมกลับเข้า state ทำให้ Streamlit ไม่ลบทิ้งตอนอยู่หน้าอื่น"""
+    for key in list(state.keys()):
+        if key in KEEP_KEYS or key.startswith(KEEP_PREFIXES):
+            state[key] = state[key]
 
 
 def set_exam(result: GenerationResult, source: Source) -> None:

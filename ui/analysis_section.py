@@ -1,4 +1,4 @@
-"""แท็บ 4 ขั้นที่ 5: วิเคราะห์ข้อสอบจากผลสอบจริง → Item Analyst วินิจฉัยข้อที่ผิดปกติ
+"""หน้าสอบทั้งห้อง ขั้นที่ 5: วิเคราะห์ข้อสอบจากผลสอบจริง → Item Analyst วินิจฉัยข้อที่ผิดปกติ
 → ปรับปรุงข้อสอบผ่านลูป Question Generator ⇄ Quality Reviewer → ครูเลือกใช้ฉบับปรับปรุง"""
 
 import dataclasses
@@ -12,6 +12,7 @@ from src.item_analysis import ExamStats
 from src.llm import LLMError
 from src.schemas import OBJECTIVE_TYPES, TYPE_LABELS, AgentStep, Exam, ItemAnalystReport, Question, StudentRecord
 
+from . import nav
 from .common import set_exam, show_progress, state
 
 ACTION_LABELS = {"keep": "✅ ใช้ต่อได้", "revise": "🔧 ปรับบางส่วน", "rewrite": "✏️ เขียนใหม่ทั้งข้อ"}
@@ -122,7 +123,10 @@ def revise_section(exam: Exam, stats: ExamStats, saved: dict, ready: bool) -> No
     revision = state.item_revision
     if revision and revision["key"] == saved["key"]:
         show_revision(exam, revision["result"], sorted(issues))
-        if st.button("ใช้ข้อสอบฉบับปรับปรุง (ดูเฉลย / พิมพ์ที่แท็บ 1)", type="primary"):
+        if state.exam is not None and state.exam.questions == revision["result"].exam.questions:
+            st.success("ใช้ฉบับปรับปรุงแล้ว · ใช้สอบห้องถัดไป: ปิดการสอบนี้ (ด้านบน) แล้วเริ่มใหม่")
+            nav.link(nav.CREATE, "ดูเฉลย / พิมพ์ฉบับปรับปรุง")
+        elif st.button("ใช้ข้อสอบฉบับปรับปรุง", type="primary"):
             use_revision(revision)
 
 
@@ -160,5 +164,5 @@ def use_revision(revision: dict) -> None:
     result: GenerationResult = revision["result"]
     title = result.exam.title if result.exam.title.endswith(REVISED_SUFFIX) else result.exam.title + REVISED_SUFFIX
     set_exam(dataclasses.replace(result, exam=result.exam.model_copy(update={"title": title})), revision["source"])
-    state.notice = f"ใช้ “{title}” แล้ว ดูเฉลยหรือพิมพ์ได้ที่แท็บ 1 · ใช้สอบห้องถัดไปได้ที่แท็บ 4 (ปิดการสอบนี้แล้วเริ่มใหม่)"
+    state.notice = f"ใช้ “{title}” แล้ว"
     st.rerun()

@@ -1,21 +1,39 @@
-"""แท็บ 4 (ครู): เลือกห้อง → พิมพ์ข้อสอบ → สอบบนกระดาษ → อัปโหลดกระดาษคำตอบทีละหลายใบ (หรือ CSV)
+"""หน้าสอบและตรวจทั้งห้อง (ครู): เลือกห้อง → พิมพ์ข้อสอบ → สอบบนกระดาษ → อัปโหลดกระดาษคำตอบทีละหลายใบ (หรือ CSV)
 → AI อ่านคำตอบ → ครูตรวจทาน → ตรวจทั้งห้อง → ตารางคะแนน → วิเคราะห์ข้อสอบจากผลจริง (ui/analysis_section.py)
 
+แถบขั้นตอนด้านบนบอกว่าทำถึงไหน ขั้นที่เสร็จแล้วพับเก็บ ขั้นที่ต้องทำต่อเปิดไว้
 ทุกการเปลี่ยนแปลงบันทึกลงฐานข้อมูล (src/school_db.py) ทันที ปิดแล้วเปิดกลับมาทำต่อได้"""
+
+from dataclasses import dataclass
 
 import streamlit as st
 
-from src import answer_reader, class_session, config, csv_import, export, school_db, scoring
+from src import answer_reader, class_session, config, csv_import, export, item_analysis, school_db, scoring
 from src.class_session import normalize_no
 from src.llm import LLMError
 from src.schemas import OBJECTIVE_TYPES, TYPE_LABELS, ClassSession, Exam, StudentRecord
 
-from . import analysis_section
+from . import analysis_section, nav
 from .answer_form import answer_fields, collect, prefill
 from .common import panel_text, show_panel, state, use_exam
 
 SHEETS = "สแกนกระดาษคำตอบ (PDF / รูปถ่าย)"
 CSV = "ไฟล์ CSV (กรอกคำตอบเอง)"
+STEP_STYLE = {  # สถานะ: (ไอคอน, สี)
+    "done": (":material/check_circle:", "green"),
+    "now": (":material/arrow_circle_right:", "blue"),
+    "todo": (":material/radio_button_unchecked:", "gray"),
+}
+
+
+@dataclass
+class Step:
+    title: str
+    short: str  # ชื่อสั้นในแถบขั้นตอน
+    status: str  # done / now / todo
+    detail: str
+    shown: bool = True  # แสดงส่วนของขั้นนี้ไหม (ตรวจทานแสดงเฉพาะตอนมีคนรอ)
+    expanded: bool = False
 
 
 def render(ready: bool) -> None:
@@ -25,24 +43,54 @@ def render(ready: bool) -> None:
             rooms, saved = school_db.classrooms(conn), school_db.sittings(conn)
     except school_db.SchoolDbError as e:
         st.error(str(e))
+        nav.link(nav.BACKUP, "กู้คืนจากไฟล์สำรอง")
         return
     if state.class_session is None:
         start_session(rooms, saved)
         return
     show_header(state.class_session)
-    st.markdown("#### 1. พิมพ์ข้อสอบไปสอบ")
-    print_section(state.class_session.exam)
-    st.markdown("#### 2. นำเข้าคำตอบ")
-    import_section(ready)
-    if class_session.awaiting_review(state.class_session):
-        st.markdown("#### 3. ตรวจทานคำตอบที่ AI อ่าน")
-        review_section()
-    st.markdown("#### 4. ตรวจและดูคะแนน")
-    grade_section(ready)
-    if any(s.results is not None for s in state.class_session.students):
-        st.markdown("#### 5. วิเคราะห์ข้อสอบจากผลสอบจริง")
-        analysis_section.render(ready)
-    close_section()
+    steps = class_steps(state.class_session)
+    show_stepper(steps)
+    sections = [lambda: print_section(state.class_session.exam), lambda: import_section(ready), review_section,
+                lambda: grade_section(ready), lambda: analysis_section.render(ready)]
+    for n, (step, section) in enumerate(zip(steps, sections), start=1):
+        if step.shown:
+            # key เปลี่ยนตามสถานะ: ขั้นที่เพิ่งเสร็จพับลง ขั้นถัดไปเปิดขึ้นเอง (ระหว่างนั้นครูเปิด/ปิดเองได้)
+            with st.expander(f"{n}. {step.title}", expanded=step.expanded, key=f"class_step_{n}_{step.expanded}",
+                             icon=STEP_STYLE[step.status][0]):
+                section()
+
+
+def class_steps(session: ClassSession) -> list[Step]:
+    """สถานะของแต่ละขั้นจากข้อมูลห้อง: ขั้นที่ต้องทำต่อ = ขั้นแรกที่ยังไม่เสร็จ"""
+    n = len(session.students)
+    waiting = len(class_session.awaiting_review(session))
+    pending = len(class_session.ready_to_grade(session))
+    graded = sum(1 for s in session.students if s.results is not None)
+    can_analyze = graded >= item_analysis.MIN_STUDENTS
+    imported = "done" if n else "now"
+    reviewed = "todo" if not n else "now" if waiting else "done"
+    scored = "now" if pending else "done" if n and graded == n else "todo"
+    analyzed = "now" if can_analyze and not waiting and not pending else "todo"
+    return [
+        Step("พิมพ์ข้อสอบไปสอบ", "พิมพ์ข้อสอบ", "done" if n or state.class_exam_pdf else "todo", "ไม่บังคับ",
+             expanded=not n),
+        Step("นำเข้าคำตอบ", "นำเข้าคำตอบ", imported, f"{n} คน" if n else "สแกนกระดาษ / CSV", expanded=not n),
+        Step("ตรวจทานคำตอบที่ AI อ่าน", "ตรวจทาน", reviewed, f"รอ {waiting} คน" if waiting else "ครบแล้ว" if n else "",
+             shown=bool(waiting), expanded=True),
+        Step("ตรวจและดูคะแนน", "ตรวจคะแนน", scored, f"ตรวจแล้ว {graded}/{n}" if n else "", shown=bool(n),
+             expanded=bool(pending or graded)),
+        Step("วิเคราะห์ข้อสอบจากผลสอบจริง", "วิเคราะห์ข้อสอบ", analyzed,
+             "พร้อม" if can_analyze else f"ต้องตรวจอย่างน้อย {item_analysis.MIN_STUDENTS} คน",
+             shown=graded > 0, expanded=True),
+    ]
+
+
+def show_stepper(steps: list[Step]) -> None:
+    for col, (n, step) in zip(st.columns(len(steps)), enumerate(steps, start=1)):
+        icon, color = STEP_STYLE[step.status]
+        col.badge(f"{n}. {step.short}", icon=icon, color=color)
+        col.caption(step.detail)
 
 
 def reset_class(session: ClassSession | None, sitting: school_db.Sitting | None = None) -> None:
@@ -59,9 +107,11 @@ def start_session(rooms: list[school_db.Classroom], saved: list[school_db.Sittin
     exam = state.exam
     st.markdown("#### เริ่มการสอบ")
     if not rooms:
-        st.info("ยังไม่มีห้องเรียน — เพิ่มห้องและนำเข้ารายชื่อนักเรียนที่แท็บ 5 ก่อน")
+        st.info("ยังไม่มีห้องเรียน — เพิ่มห้องและนำเข้ารายชื่อนักเรียนก่อน")
+        nav.link(nav.ROOMS, "เพิ่มห้องเรียนและรายชื่อ")
     elif exam is None:
-        st.info("สร้างข้อสอบที่แท็บ 1 ก่อน")
+        st.info("ยังไม่มีข้อสอบ — สร้างข้อสอบก่อน แล้วกลับมาเริ่มสอบที่หน้านี้")
+        nav.link(nav.CREATE, "ไปออกข้อสอบ")
     else:
         col_room, col_term = st.columns([3, 1])
         room = col_room.selectbox("ห้องที่สอบ", rooms, format_func=lambda c: c.label, key="class_room")
@@ -106,20 +156,22 @@ def roster_names() -> dict[str, str]:
 
 def show_header(session: ClassSession) -> None:
     exam, sitting = session.exam, state.class_sitting
-    graded = sum(1 for s in session.students if s.results is not None)
-    waiting = len(class_session.awaiting_review(session))
-    st.markdown(
-        f"**{sitting.classroom.name}** ภาคเรียน {sitting.term}/{sitting.classroom.year} · **ข้อสอบ:** {exam.title} · "
-        f"{len(exam.questions)} ข้อ · ผู้สอบ {len(session.students)} คน (รอตรวจทาน {waiting} · ตรวจแล้ว {graded})"
-    )
+    col_info, col_close = st.columns([5, 1], vertical_alignment="center")
+    col_info.markdown(f"### {sitting.classroom.name} · ภาคเรียน {sitting.term}/{sitting.classroom.year}")
+    col_info.caption(f"ข้อสอบ: **{exam.title}** · {len(exam.questions)} ข้อ · บันทึกลงฐานข้อมูลในเครื่องอัตโนมัติ "
+                     "(ไม่รวมภาพกระดาษ)")
+    if col_close.button("ปิดการสอบนี้", help="เปิดกลับมาทำต่อได้จากรายการการสอบที่บันทึกไว้"):
+        reset_class(None)
+        st.rerun()
     roster = roster_names()
     if not roster:
-        st.caption("ห้องนี้ยังไม่มีรายชื่อนักเรียน — นำเข้าที่แท็บ 5 แล้วระบบจะใช้ชื่อจากรายชื่อตามเลขที่ "
+        st.caption("ห้องนี้ยังไม่มีรายชื่อนักเรียน — ถ้านำเข้ารายชื่อ ระบบจะใช้ชื่อจากรายชื่อตามเลขที่ "
                    "แทนชื่อที่ AI อ่านจากลายมือ")
+        nav.link(nav.ROOMS, "นำเข้ารายชื่อ")
     elif missing := class_session.absent(session, roster):
         st.caption(f"ยังไม่มีคำตอบ {len(missing)} คน: เลขที่ {', '.join(missing)}")
     if state.exam and state.exam != exam:
-        st.info("การสอบนี้ใช้ข้อสอบชุดก่อน ไม่ใช่ชุดล่าสุดในแท็บ 1 — ถ้าจะใช้ชุดล่าสุด ให้ปิดการสอบนี้ (ด้านล่าง) แล้วเริ่มใหม่")
+        st.info("การสอบนี้ใช้ข้อสอบชุดก่อน ไม่ใช่ชุดล่าสุดในหน้าออกข้อสอบ — ถ้าจะใช้ชุดล่าสุด ให้ปิดการสอบนี้แล้วเริ่มใหม่")
 
 
 def print_section(exam: Exam) -> None:
@@ -336,6 +388,9 @@ def grade_section(ready: bool) -> None:
     if not session.students:
         st.info("ยังไม่มีคำตอบ นำเข้าในขั้นที่ 2 ก่อน")
         return
+    if state.class_graded:
+        st.success(state.class_graded)
+        state.class_graded = None
     pending = class_session.ready_to_grade(session)
     waiting = class_session.awaiting_review(session)
     needs_llm = class_session.needs_llm(session.exam)
@@ -355,10 +410,13 @@ def grade_section(ready: bool) -> None:
             f"ตรวจแล้ว {len(percents)} คน · เฉลี่ย {sum(percents) / len(percents):.1f}% · "
             f"สูงสุด {max(percents):g}% · ต่ำสุด {min(percents):g}%"
         )
-        st.download_button(
+        col_csv, col_scores = st.columns(2)
+        col_csv.download_button(
             "⬇️ คะแนนรายคน (CSV สำหรับลงสมุดคะแนน)", class_session.scores_csv(session),
             file_name="scores.csv", mime="text/csv",
         )
+        with col_scores:
+            nav.link(nav.SCORES, "ดูคะแนนข้ามการสอบ รายคน รายห้อง รายชั้น")
     choice = st.selectbox(
         "ดูรายละเอียดรายคน", range(len(session.students)), index=None, placeholder="เลือกผู้สอบ",
         format_func=lambda i: f"{session.students[i].student_no} {session.students[i].name}".strip(),
@@ -379,7 +437,8 @@ def grade_all(indices: list[int]) -> None:
             st.error(f"ตรวจของ {student.name} ไม่สำเร็จ: {e} — คนที่ตรวจแล้วเก็บไว้แล้ว กดตรวจต่อได้")
             return
         save(class_session.update_student(state.class_session, i, graded))
-    bar.progress(1.0, text=f"ตรวจครบ {len(indices)} คนแล้ว")
+    state.class_graded = f"ตรวจครบ {len(indices)} คนแล้ว"
+    st.rerun()  # ให้แถบขั้นตอนขยับไปขั้นถัดไป
 
 
 def grading_note(exam: Exam) -> str:
@@ -415,13 +474,3 @@ def show_student(exam: Exam, student: StudentRecord) -> None:
         if r.panel:
             st.markdown(f"**ข้อ {r.question_id} (เรียงความ)**")
             show_panel(r)
-
-
-# ---------------- ปิดการสอบ ----------------
-
-def close_section() -> None:
-    st.caption("บันทึกลงฐานข้อมูลในเครื่องอัตโนมัติทุกครั้งที่นำเข้า ตรวจทาน หรือตรวจคะแนน (ไม่รวมภาพกระดาษ) "
-               "· ดูคะแนนข้ามการสอบ รายคน รายห้อง รายชั้น ได้ที่แท็บ 5")
-    if st.button("ปิดการสอบนี้ (เปิดกลับมาได้จากรายการการสอบที่บันทึกไว้)"):
-        reset_class(None)
-        st.rerun()

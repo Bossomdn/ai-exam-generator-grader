@@ -22,6 +22,7 @@ from src.schemas import (
     Question, QuestionReview, RevisedQuestions, RosterEntry, RubricCriterion, SectionSpec, StudentRecord,
     SubjectiveGrade, WeakTopic,
 )
+from ui import nav
 
 APP = str(Path(__file__).parent.parent / "app.py")
 SPEC = ExamSpec(
@@ -92,34 +93,72 @@ def click(at: AppTest, label: str) -> None:
     assert not at.exception, at.exception
 
 
+def go(at: AppTest, page: str) -> None:
+    """สลับไปหน้าในเมนู เช่น go(at, nav.CLASS)
+    AppTest จำหน้าปัจจุบันเอง: ถ้าแอปสั่ง st.switch_page ระหว่างรัน ต้องเรียก go() ตามก่อนกดปุ่มในหน้าใหม่"""
+    at.switch_page(page).run()
+    assert not at.exception, at.exception
+
+
+def page_links(at: AppTest) -> list[str]:
+    """หน้าที่มีลิงก์ให้กดไป (แปลง url ของหน้า เช่น "class_exam" กลับเป็นไฟล์ใน views/ หน้าเริ่มต้นมี url ว่าง)"""
+    return [f"views/{link.proto.page}.py" if link.proto.page else nav.CREATE for link in at.get("page_link")]
+
+
 def test_create_take_grade_and_practice(app):
     at = app
     [r for r in at.radio if r.label == "แหล่งเนื้อหา"][0].set_value("ใช้เนื้อหาตัวอย่าง").run()
+    assert [b for b in at.button if b.label == "วิเคราะห์คำสั่ง"][0].disabled  # ยังไม่มีคำสั่ง
+    at.text_area(key="create_prompt").set_value("ขอข้อสอบผสม").run()
     click(at, "วิเคราะห์คำสั่ง")
     assert [t.value for t in at.text_input if t.key and t.key.startswith("spec_title")] == ["ML เบื้องต้น"]
     assert any("ระบบจึงตั้งค่าให้" in i.value for i in at.info)
+
+    at.text_area(key="create_prompt").set_value("ปรนัย 3 ข้อ").run()  # เปลี่ยนคำสั่ง → สเปกเดิมใช้ไม่ได้แล้ว
+    assert any("เปลี่ยนไปแล้ว" in i.value for i in at.info)
+    at.text_area(key="create_prompt").set_value("ขอข้อสอบผสม").run()
 
     click(at, "สร้างข้อสอบตามสเปกนี้")
     exam = at.session_state["exam"]
     assert [(q.type, q.points) for q in exam.questions] == [("mcq", 1), ("mcq", 1), ("essay", 10)]
     assert {k: v.status for k, v in at.session_state["quality"].items()} == {1: "passed", 2: "fixed", 3: "passed"}
     assert any("แก้ตามผลตรวจแล้วผ่าน 1 ข้อ" in m.value for m in at.markdown)
+    assert not [b for b in at.button if b.label == "วิเคราะห์คำสั่ง"]  # สร้างเสร็จ: ข้อสอบขึ้นก่อน ฟอร์มซ่อน
+    assert {nav.CLASS, nav.PRACTICE} <= set(page_links(at))
 
-    at.text_area[0].set_value("ปรนัย 3 ข้อ").run()  # เปลี่ยนคำสั่ง → สเปกเดิมใช้ไม่ได้แล้ว
-    assert any("เปลี่ยนไปแล้ว" in i.value for i in at.info)
-
+    go(at, nav.PRACTICE)
     v = at.session_state["version"]
     at.session_state[f"ans_{v}_1"] = 0
     at.session_state[f"ans_{v}_3"] = "overfitting คือ..."
     at.run()
-    click(at, "ส่งคำตอบให้ตรวจ")
+    go(at, nav.CREATE)  # สลับหน้าแล้วกลับมา คำตอบต้องยังอยู่
+    go(at, nav.PRACTICE)
+    assert at.session_state[f"ans_{v}_3"] == "overfitting คือ..."
+    assert any("ตอบแล้ว 2/3 ข้อ" in c.value for c in at.caption)
+
+    click(at, "ส่งคำตอบให้ตรวจ")  # ตรวจเสร็จแล้วไปหน้าผลเอง
     assert [(r.question_id, r.points_awarded) for r in at.session_state["results"]] == [(1, 1), (2, 0), (3, 2)]
     assert any("ต้องเรียนเพิ่ม" in p.proto.text for p in at.get("progress"))
     assert any("คณะผู้ตรวจ" in c.value and "เห็นตรงกัน" in c.value for c in at.caption)  # เรียงความตรวจด้วยคณะ
 
+    go(at, nav.FEEDBACK)
     click(at, "สร้างแบบฝึกเพิ่มเรื่องที่อ่อน")
     assert at.session_state["version"] == v + 1 and at.session_state["results"] is None
     assert at.session_state["trace"][0].agent == "Request Planner"
+    assert any(b.label == "ส่งคำตอบให้ตรวจ" for b in at.button)  # พาไปหน้าทำแบบฝึก
+
+
+def test_pages_without_data_point_to_the_step_before(app):
+    at = app
+    expected = {nav.PRACTICE: nav.CREATE, nav.FEEDBACK: nav.PRACTICE, nav.CLASS: nav.ROOMS, nav.SCORES: nav.ROOMS}
+    for page, before in expected.items():
+        go(at, page)
+        assert before in page_links(at), page
+    add_room()
+    go(at, nav.CLASS)  # มีห้องแล้วแต่ยังไม่มีข้อสอบ
+    assert nav.CREATE in page_links(at)
+    go(at, nav.BACKUP)
+    assert any(b.label == "สร้างไฟล์สำรอง" for b in at.button)
 
 
 def _png() -> bytes:
@@ -141,8 +180,7 @@ def test_uploaded_sheet_shows_review_warnings(app):
     at.session_state["answer_mode"] = "อัปโหลดกระดาษคำตอบ (PDF / รูปถ่าย)"
     at.session_state["sheet"] = {"version": 1, "result": extracted,
                                  "file": answer_reader.AnswerSheetFile(name="scan.png", pages=1, images=[_png()])}
-    at.run()
-    assert not at.exception, at.exception
+    go(at, nav.PRACTICE)
     warnings = " | ".join(w.value for w in at.warning)
     assert "ไม่ตรงกับข้อความตัวเลือก" in warnings
     assert "ไม่พบคำตอบข้อนี้ในไฟล์" in warnings
@@ -158,9 +196,14 @@ def add_room(roster: list[RosterEntry] = ()) -> school_db.Classroom:
 
 def start_class(at: AppTest, exam: Exam) -> None:
     at.session_state["exam"] = exam
-    at.run()
+    go(at, nav.CLASS)
     click(at, f"เริ่มเก็บคำตอบทั้งห้องด้วยข้อสอบ “{exam.title}”")
     assert at.session_state["class_sitting"].classroom.name == "ม.4/1"
+
+
+def current_steps(at: AppTest) -> list[str]:
+    """ขั้นที่แถบขั้นตอนบอกว่าต้องทำต่อ (badge สีน้ำเงิน)"""
+    return [m.value for m in at.markdown if ":blue-badge[" in m.value]
 
 
 def test_class_tab_imports_and_grades_whole_class(app):
@@ -169,14 +212,18 @@ def test_class_tab_imports_and_grades_whole_class(app):
                 questions=[mcq(1), mcq(2), ESSAY])
     room = add_room()
     start_class(at, exam)
+    assert any("นำเข้าคำตอบ" in s for s in current_steps(at))
     filled = csv_import.template_csv(exam).decode("utf-8-sig") + "1,นายเอ,ก,ค1,คำตอบ\n2,นางบี,,ข,\n"
     imported = csv_import.parse_responses(exam, filled.encode("utf-8"))
     at.session_state["class_session"] = class_session.merge_students(
         at.session_state["class_session"], imported.students)[0]
     at.run()
     assert not at.exception, at.exception
+    assert any("ตรวจคะแนน" in s for s in current_steps(at))
 
     click(at, "ตรวจคำตอบที่ยังไม่ได้ตรวจ (2 คน)")
+    assert any("ตรวจครบ 2 คนแล้ว" in s.value for s in at.success)
+    assert any("วิเคราะห์ข้อสอบ" in s for s in current_steps(at))
     rows = class_session.score_rows(at.session_state["class_session"])
     # นายเอ: ข้อ 1 ถูก (1) + ข้อ 2 ตอบ ค (0) + เรียงความ (คะแนนเต็มข้อนี้ 1 จึงได้ไม่เกิน 1) = 2
     assert [(r["ชื่อ"], r["คะแนนรวม"], r["สถานะ"]) for r in rows] == [("นายเอ", 2, "ตรวจแล้ว"), ("นางบี", 0, "ตรวจแล้ว")]
@@ -186,7 +233,7 @@ def test_class_tab_imports_and_grades_whole_class(app):
         table = school_db.classroom_table(conn, room.id)
     assert [(r["ชื่อ"], r["เฉลี่ย"]) for r in table] == [("นายเอ", 66.7), ("นางบี", 0.0)]  # 2 จาก 3 คะแนน
 
-    click(at, "ปิดการสอบนี้ (เปิดกลับมาได้จากรายการการสอบที่บันทึกไว้)")
+    click(at, "ปิดการสอบนี้")
     assert at.session_state["class_session"] is None
     click(at, "เปิดการสอบนี้")
     assert [s.name for s in at.session_state["class_session"].students if s.results] == ["นายเอ", "นางบี"]
@@ -257,11 +304,33 @@ def test_review_with_roster_picks_student_from_list(app):
     assert (student.student_no, student.name, student.reviewed) == ("2", "นางสาวบี", True)
 
 
-def test_school_tab_adds_room_and_shows_scores(app):
+def test_rooms_page_adds_several_rooms_in_a_row(app):
     at = app
-    fields = {t.label: t for t in at.text_input if t.label in ("ชั้น", "ห้อง")}
-    fields["ชั้น"].set_value("ม.4")
-    fields["ห้อง"].set_value("2")
+    go(at, nav.ROOMS)
+    at.text_input(key="new_room_grade").set_value("ม.4")
+    at.text_input(key="new_room_numbers").set_value("1-3")
+    click(at, "เพิ่มห้อง")
+    assert any("เพิ่มห้อง ม.4/1, ม.4/2, ม.4/3" in s.value for s in at.success)
+    # ชั้นยังอยู่ ช่องเลขห้องว่าง → แก้แค่เลขห้องแล้วเพิ่มต่อ (ห้อง 2 มีแล้ว ต้องบอกว่าข้าม)
+    assert at.text_input(key="new_room_grade").value == "ม.4" and at.text_input(key="new_room_numbers").value == ""
+    at.text_input(key="new_room_numbers").set_value("๒, 4")
+    click(at, "เพิ่มห้อง")
+    assert any("เพิ่มห้อง ม.4/4" in s.value for s in at.success)
+    assert any("ม.4/2 มีอยู่แล้ว" in m.value for m in at.markdown)
+    with school_db.connect() as conn:
+        assert [r.name for r in school_db.classrooms(conn)] == ["ม.4/1", "ม.4/2", "ม.4/3", "ม.4/4"]
+    assert any("ปีการศึกษา" in m.value and "4 ห้อง" in m.value for m in at.markdown)
+
+    at.text_input(key="new_room_numbers").set_value("5-2")
+    click(at, "เพิ่มห้อง")
+    assert any("ช่วงห้อง" in e.value for e in at.error)
+
+
+def test_school_pages_add_room_show_scores_and_back_up(app):
+    at = app
+    go(at, nav.ROOMS)
+    at.text_input(key="new_room_grade").set_value("ม.4")
+    at.text_input(key="new_room_numbers").set_value("2")
     click(at, "เพิ่มห้อง")
     with school_db.connect() as conn:
         [room] = school_db.classrooms(conn)
@@ -271,6 +340,7 @@ def test_school_tab_adds_room_and_shows_scores(app):
         school_db.save_session(conn, school_db.open_sitting(conn, exam, room.id, 1), session)
     assert room.name == "ม.4/2" and at.session_state["school_room"] == room.id
 
+    go(at, nav.SCORES)
     for view in ("รายห้อง", "รายชั้น"):
         [r for r in at.radio if r.label == "ดูคะแนน"][0].set_value(view).run()
         assert not at.exception, at.exception
@@ -279,6 +349,7 @@ def test_school_tab_adds_room_and_shows_scores(app):
     [s for s in at.selectbox if s.label == "นักเรียน"][0].set_value(0).run()
     assert any("ชุดแท็บห้า" in str(d.value) for d in at.dataframe)
 
+    go(at, nav.BACKUP)
     click(at, "สร้างไฟล์สำรอง")
     assert at.session_state["school_backup"].startswith(b"SQLite format 3")
 
@@ -303,8 +374,9 @@ def test_class_tab_item_analysis_revises_exam(app):
     assert not at.exception, at.exception
     assert any("ก่อนแก้" in c.value for c in at.caption) and any("Reviewer ตรวจผ่าน" in m.value for m in at.markdown)
 
-    click(at, "ใช้ข้อสอบฉบับปรับปรุง (ดูเฉลย / พิมพ์ที่แท็บ 1)")
+    click(at, "ใช้ข้อสอบฉบับปรับปรุง")
     assert at.session_state["exam"].title == "ชุดวิเคราะห์ (ฉบับปรับปรุงจากผลสอบ)"
+    assert any("ใช้ฉบับปรับปรุงแล้ว" in s.value for s in at.success) and nav.CREATE in page_links(at)
     assert [s.agent for s in at.session_state["trace"]] == [
         "Item Analyst", "Question Generator (แก้ไข)", "Quality Reviewer"]
     assert at.session_state["class_session"].exam == exam  # ผลสอบเดิมยังผูกกับข้อสอบฉบับที่ใช้สอบจริง

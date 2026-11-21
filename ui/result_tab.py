@@ -1,4 +1,4 @@
-"""แท็บ 3: คะแนน, คะแนนรายหัวข้อ, คำแนะนำจาก Learning Advisor, แบบฝึกเพิ่ม, รายละเอียดรายข้อ, รายงาน PDF"""
+"""หน้าผลและคำแนะนำ: คะแนน, คะแนนรายหัวข้อ, คำแนะนำจาก Learning Advisor, แบบฝึกเพิ่ม, รายละเอียดรายข้อ, รายงาน PDF"""
 
 import json
 
@@ -7,13 +7,15 @@ import streamlit as st
 from src import config, export, scoring
 from src.schemas import OBJECTIVE_TYPES, ConceptMastery, Exam, LearningReport, QuestionResult
 
+from . import nav
 from .common import run_with_progress, set_exam, show_panel, state
 
 
 def render(ready: bool) -> None:
     exam, results, mastery, report = state.exam, state.results, state.mastery, state.report
     if not results:
-        st.info("ทำข้อสอบและส่งตรวจที่แท็บ 2 ก่อน")
+        st.info("ยังไม่มีผลสอบ — ทำข้อสอบแล้วส่งตรวจก่อน")
+        nav.link(nav.PRACTICE, "ไปทำข้อสอบ")
         return
     show_scores(results, mastery)
     if report:
@@ -82,12 +84,12 @@ def show_report(report: LearningReport, mastery: list[ConceptMastery], ready: bo
         "คำสั่งสำหรับแบบฝึกชุดถัดไป (แก้ได้)", value=report.practice_prompt, key=f"practice_{state.version}"
     )
     if st.button("สร้างแบบฝึกเพิ่มเรื่องที่อ่อน", disabled=state.source is None or not ready):
-        # ใช้กราฟเดียวกับแท็บ 1 แต่ให้ Request Planner วางสเปกเองโดยไม่ต้องรอยืนยัน
+        # ใช้กราฟเดียวกับหน้าออกข้อสอบ แต่ให้ Request Planner วางสเปกเองโดยไม่ต้องรอยืนยัน
         result = run_with_progress(state.source, request=practice_prompt)
         if result:
             set_exam(result, state.source)
-            state.notice = "สร้างแบบฝึกชุดใหม่แล้ว ไปทำที่แท็บ 2. ทำข้อสอบ"
-            st.rerun()
+            state.notice = f"สร้างแบบฝึก “{result.exam.title}” แล้ว ทำได้เลย"
+            st.switch_page(nav.PRACTICE)
 
 
 def show_question_details(exam: Exam, results: list[QuestionResult]) -> None:

@@ -1,4 +1,5 @@
-"""แท็บ 2: ทำข้อสอบในแอป หรืออัปโหลดกระดาษคำตอบ (PDF / รูปถ่าย) ให้ AI ถอดคำตอบ → ตรวจทาน → ส่งตรวจ"""
+"""หน้าฝึกทำข้อสอบ: ทำข้อสอบในแอป หรืออัปโหลดกระดาษคำตอบ (PDF / รูปถ่าย) ให้ AI ถอดคำตอบ → ตรวจทาน → ส่งตรวจ
+→ ไปหน้าผลและคำแนะนำ"""
 
 import streamlit as st
 
@@ -8,6 +9,7 @@ from src.grading_graph import grade_exam
 from src.llm import LLMError
 from src.schemas import Exam
 
+from . import nav
 from .answer_form import answer_fields
 from .common import state
 
@@ -15,7 +17,8 @@ from .common import state
 def render(ready: bool) -> None:
     exam = state.exam
     if not exam:
-        st.info("สร้างข้อสอบที่แท็บ 1 ก่อน")
+        st.info("ยังไม่มีข้อสอบ — สร้างข้อสอบหรือแบบฝึกก่อน")
+        nav.link(nav.CREATE, "ไปออกข้อสอบ")
         return
     v = state.version
     st.subheader(exam.title)
@@ -37,9 +40,11 @@ def render(ready: bool) -> None:
                     state.mastery = scoring.concept_mastery(state.results)
                 with st.spinner("กำลังวิเคราะห์จุดที่ต้องเรียนเพิ่ม..."):
                     state.report = advise(exam, state.results, state.mastery)
-                st.success("ตรวจเสร็จแล้ว ดูผลที่แท็บ **3. ผลและคำแนะนำ**")
             except LLMError as e:
                 st.error(str(e))
+                return
+            state.notice = "ตรวจเสร็จแล้ว"
+            st.switch_page(nav.FEEDBACK)
 
 
 def upload_answer_sheet(exam: Exam, v: int, sheet: dict | None, ready: bool) -> dict | None:
@@ -77,7 +82,10 @@ def upload_answer_sheet(exam: Exam, v: int, sheet: dict | None, ready: bool) -> 
 
 
 def render_answer_form(exam: Exam, v: int, upload_mode: bool, extracted_by_id: dict, ready: bool) -> bool:
-    """ฟอร์มตอบข้อสอบ (ใช้ตรวจทานคำตอบที่ถอดจากไฟล์ด้วย) คืน True เมื่อกดส่งตรวจ"""
-    with st.form(f"exam_form_{v}"):
+    """ช่องตอบข้อสอบ (ใช้ตรวจทานคำตอบที่ถอดจากไฟล์ด้วย) คืน True เมื่อกดส่งตรวจ
+    ไม่ใช้ st.form เพื่อให้คำตอบเก็บลง state ทันทีที่ตอบ (สลับหน้าแล้วกลับมาคำตอบไม่หาย)"""
+    with st.container(border=True):
         answer_fields(exam, f"ans_{v}", extracted_by_id if upload_mode else None)
-        return st.form_submit_button("ส่งคำตอบให้ตรวจ", type="primary", disabled=not ready)
+        answered = sum(1 for q in exam.questions if state.get(f"ans_{v}_{q.id}") not in (None, ""))
+        st.caption(f"ตอบแล้ว {answered}/{len(exam.questions)} ข้อ")
+        return st.button("ส่งคำตอบให้ตรวจ", type="primary", disabled=not ready)
