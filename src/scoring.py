@@ -134,6 +134,13 @@ def totals(results: list[QuestionResult]) -> dict[str, float]:
     }
 
 
+def after_retest(first: float, retest: Optional[float], pass_percent: float) -> float:
+    """ร้อยละหลังสอบซ่อม: คะแนนซ่อมได้ไม่เกินเกณฑ์ผ่าน และไม่ทำให้ต่ำกว่าคะแนนครั้งแรก"""
+    if retest is None:
+        return first
+    return max(first, min(retest, pass_percent))
+
+
 def concept_mastery(results: list[QuestionResult]) -> list[ConceptMastery]:
     """คะแนนรายหัวข้อ เรียงจากอ่อนสุดไปเก่งสุด"""
     groups: dict[str, list[QuestionResult]] = defaultdict(list)

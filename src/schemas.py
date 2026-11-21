@@ -164,6 +164,7 @@ class ExtractedAnswer(BaseModel):
 class ExtractedAnswerSheet(BaseModel):
     student_name: str
     student_no: str = Field(description="เลขที่หรือรหัสผู้สอบที่เขียนในกระดาษ ถ้าไม่มีให้ ''")
+    form_code: str = Field("", description="รหัสชุดข้อสอบที่พิมพ์บนหัวกระดาษ เช่น 'ก' หรือ 'ข' ถ้าไม่มีให้ ''")
     answers: list[ExtractedAnswer]
 
 
@@ -235,7 +236,8 @@ class StudentRecord(BaseModel):
     import_notes: list[str] = []  # คำเตือนตอนนำเข้า เช่น จับคู่ตัวเลือกไม่ได้ / AI อ่านไม่ชัด
     reviewed: bool = True  # คำตอบที่ AI อ่านจากกระดาษต้องให้ครูตรวจทานก่อนตรวจคะแนน
     sheet_name: str = ""  # ไฟล์กระดาษคำตอบ (ใช้หาภาพตอนตรวจทาน)
-    extracted: Optional[ExtractedAnswerSheet] = None  # สิ่งที่ AI อ่านได้จากกระดาษ (ก่อนครูแก้)
+    extracted: Optional[ExtractedAnswerSheet] = None  # สิ่งที่ AI อ่านได้จากกระดาษ ตามเลขข้อที่พิมพ์ในชุดนั้น (ก่อนครูแก้)
+    form: str = ""  # ชุดที่สอบ (ก ข ค ง) "" = มีชุดเดียว · answers เก็บตามข้อสอบต้นฉบับเสมอ
     results: Optional[list[QuestionResult]] = None  # None = ยังไม่ได้ตรวจ
 
     @property
@@ -271,3 +273,12 @@ class ItemDiagnosis(BaseModel):
 class ItemAnalystReport(BaseModel):
     summary: str = Field(description="ภาพรวมคุณภาพข้อสอบชุดนี้จากผลสอบจริง 2–3 ประโยค")
     items: list[ItemDiagnosis] = Field(description="เฉพาะข้อที่ส่งมาให้วิเคราะห์ ครบทุกข้อ")
+
+
+# ---------- ข้อสอบชุดสลับกันลอก (src/exam_forms.py) ----------
+
+class ExamForm(BaseModel):
+    """ชุดสลับ 1 ชุด: ข้อเดิมทั้งหมด แต่ลำดับข้อและตัวเลือกที่พิมพ์ต่างจากต้นฉบับ"""
+    code: str  # ก ข ค ง
+    order: list[int]  # id ข้อในต้นฉบับ ตามลำดับที่พิมพ์ (พิมพ์เป็นข้อ 1 = order[0])
+    choices: dict[int, list[int]] = {}  # id ข้อปรนัย → index ตัวเลือกในต้นฉบับ ตามลำดับที่พิมพ์ (ไม่มี = ไม่สลับ)

@@ -40,6 +40,7 @@ h1 { font-size: 17pt; text-align: center; margin: 0 0 1mm; }
 h2 { font-size: 13.5pt; background: #ececec; padding: 1.2mm 3mm; margin: 6mm 0 3mm; break-after: avoid; }
 h3 { font-size: 12pt; margin: 4mm 0 1mm; break-after: avoid; }
 .subtitle { text-align: center; color: #444; margin-bottom: 5mm; }
+.form-code { float: right; border: 2px solid #000; padding: 1mm 4mm; font-size: 15pt; font-weight: 700; }
 .info { border: 1px solid #333; padding: 3mm 4mm; margin-bottom: 4mm; display: flex; flex-wrap: wrap; gap: 2mm 6mm; }
 .field { display: inline-block; border-bottom: 1px dotted #333; min-width: 30mm; }
 .field.wide { min-width: 70mm; }
@@ -137,10 +138,16 @@ def _question_block(q: Question) -> str:
     return f'<div class="question">{head}{body}</div>'
 
 
-def exam_html(exam: Exam) -> str:
+def _form_badge(form_code: str) -> str:
+    """รหัสชุดมุมขวาบน (ชุดสลับกันลอก) ให้ AI อ่านได้ว่ากระดาษเป็นชุดไหน"""
+    return f'<div class="form-code">ชุด {_t(form_code)}</div>' if form_code else ""
+
+
+def exam_html(exam: Exam, form_code: str = "") -> str:
     objective, subjective = _split(exam)
     total = _points(exam.questions)
     parts = [
+        _form_badge(form_code),
         f"<h1>{_t(exam.title)}</h1>",
         f'<div class="subtitle">จำนวน {len(exam.questions)} ข้อ · คะแนนเต็ม {total:g} คะแนน</div>',
         '<div class="info">'
@@ -169,9 +176,10 @@ def exam_html(exam: Exam) -> str:
 
 # ---------------- เฉลย + rubric ----------------
 
-def answer_key_html(exam: Exam) -> str:
+def answer_key_html(exam: Exam, form_code: str = "") -> str:
     objective, subjective = _split(exam)
     parts = [
+        _form_badge(form_code),
         f"<h1>เฉลยและเกณฑ์การให้คะแนน</h1>",
         f'<div class="subtitle">{_t(exam.title)} · สำหรับผู้สอน (ไม่แจกผู้สอบ)</div>',
     ]
@@ -347,12 +355,12 @@ def html_to_pdf(html: str) -> bytes:
             raise ExportError(f"สร้าง PDF ไม่สำเร็จ: {e}") from e
 
 
-def exam_pdf(exam: Exam) -> bytes:
-    return html_to_pdf(exam_html(exam))
+def exam_pdf(exam: Exam, form_code: str = "") -> bytes:
+    return html_to_pdf(exam_html(exam, form_code))
 
 
-def answer_key_pdf(exam: Exam) -> bytes:
-    return html_to_pdf(answer_key_html(exam))
+def answer_key_pdf(exam: Exam, form_code: str = "") -> bytes:
+    return html_to_pdf(answer_key_html(exam, form_code))
 
 
 def report_pdf(exam: Exam, results: list[QuestionResult], mastery: list[ConceptMastery],
