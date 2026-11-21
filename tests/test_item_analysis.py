@@ -101,3 +101,18 @@ def test_no_flagged_items_skips_the_llm(monkeypatch):
     stats = item_analysis.analyze(EXAM, graded(EXAM, ROWS))
     clean = dataclasses.replace(stats, items=[i for i in stats.items if not i.flags])
     assert item_analyst.analyze_items(EXAM, clean).items == []
+
+
+def test_teaching_patterns_exclude_unanswered_and_validate_llm_findings(monkeypatch):
+    from src.schemas import TeachingFinding, TeachingReport
+    stats = item_analysis.analyze(EXAM, graded(EXAM, ROWS))
+    patterns = item_analyst.teaching_patterns(EXAM, stats)
+    assert [(q.id, c.label, c.total) for q, c in patterns] == [(1, "ข. b", 3), (2, "ค. c", 3), (3, "ผิด", 4)]
+    def fake(**kwargs):
+        return TeachingReport(findings=[
+            TeachingFinding(question_id=1, choice="ข. b", misconception="อาจสับสน", teaching="ยกตัวอย่าง"),
+            TeachingFinding(question_id=1, choice="ก. a", misconception="ผิด", teaching="สอน"),
+        ])
+    monkeypatch.setattr(item_analyst, "call_structured", fake)
+    report = item_analyst.analyze_teaching(EXAM, stats)
+    assert [f.choice for f in report.findings] == ["ข. b"]

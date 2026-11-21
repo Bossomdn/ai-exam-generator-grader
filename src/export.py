@@ -284,6 +284,13 @@ def report_html(
         if q.type in OBJECTIVE_TYPES:
             mark = "ถูก" if r.is_correct else "ผิด"
             note = f"ตอบ: {_t(r.student_answer)} ({mark})<br>เฉลย: {_t(scoring.choice_label(q, q.correct_choice))}"
+            if len(q.choice_explanations) == len(q.choices):
+                selected = next((i for i in range(len(q.choices))
+                                 if scoring.choice_label(q, i) == r.student_answer), None)
+                if selected is not None:
+                    note += "<br>เหตุผลของตัวเลือกที่ตอบ: " + _t(q.choice_explanations[selected])
+            else:
+                note += "<br>คำอธิบาย: " + _t(q.explanation)
         else:
             note = _t(r.feedback)
             if r.unverified_evidence:

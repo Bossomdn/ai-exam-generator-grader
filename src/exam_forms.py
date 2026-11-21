@@ -70,6 +70,8 @@ def form_exam(exam: Exam, form: ExamForm) -> Exam:
         if perm := form.choices.get(base_id):
             update["choices"] = [q.choices[i] for i in perm]
             update["correct_choice"] = perm.index(q.correct_choice)
+            if len(q.choice_explanations) == len(q.choices):
+                update["choice_explanations"] = [q.choice_explanations[i] for i in perm]
         questions.append(q.model_copy(update=update))
     return exam.model_copy(update={"questions": questions})
 

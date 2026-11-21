@@ -97,3 +97,21 @@ def test_retest_scores_flow_into_room_student_and_grade_views():
         summary = retest.summary(first, [again], 50)
         assert [(r["ชื่อ"], r["ครั้งแรก"], r["สอบซ่อม"], r["หลังซ่อม"], r["ผ่านเกณฑ์"]) for r in summary] == [
             ("บี", 25.0, 100.0, 50.0, "✓"), ("ซี", 0.0, 25.0, 25.0, "✗")]
+
+
+def test_personal_retest_uses_only_student_weak_concepts(monkeypatch):
+    questions = [q.model_copy(update={"concept": "A" if q.id <= 2 else "B"}) for q in EXAM.questions]
+    exam = EXAM.model_copy(update={"concepts": ["A", "B"], "questions": questions})
+    student = class_session.grade_student(exam, StudentRecord(name="บี", answers={1: 0, 2: 0, 3: 1, 4: 1}, source="csv"))
+    assert retest.weak_concepts(student, 50) == ["B"]
+    other = class_session.grade_student(exam, StudentRecord(name="ซี", answers={1: 1, 2: 1, 3: 0, 4: 0}, source="csv"))
+    assert retest.weak_concepts(other, 50) == ["A"]
+    spec = retest.retest_spec(exam, retest.weak_concepts(student, 50))
+    assert spec.concepts == ["B"] and sum(s.count for s in spec.sections) == 4
+
+    def fake_generation(source, *, spec, on_step=None):
+        return GenerationResult(exam=exam, spec=spec, quality=[], rounds=0, trace=[])
+    monkeypatch.setattr(retest, "run_generation", fake_generation)
+    from src.llm import LLMError
+    with pytest.raises(LLMError, match="หัวข้อนอกเหนือ"):
+        retest.make_retest(from_topic("ระบบหายใจ"), exam, concepts=["B"])

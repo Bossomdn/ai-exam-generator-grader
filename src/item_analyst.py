@@ -86,3 +86,42 @@ def revision_request(report: ItemAnalystReport, stats: ExamStats) -> tuple[dict[
         prefix = "เขียนข้อใหม่ทั้งข้อ โดยวัดหัวข้อเดิม: " if d.action == "rewrite" else ""
         suggestions[d.question_id] = prefix + d.suggestion
     return issues, suggestions
+
+
+def teaching_patterns(exam: Exam, stats: ExamStats):
+    """ตัวลวงที่ถูกเลือกมากที่สุดในแต่ละข้อ พร้อมจำนวนจริง (ไม่รวมไม่ได้ตอบ)"""
+    questions = {q.id: q for q in exam.questions}
+    patterns = []
+    for item in stats.items:
+        q = questions[item.question_id]
+        wrong = [c for c in item.choices if not c.is_key and c.label != "(ไม่ได้ตอบ)" and c.total]
+        if wrong:
+            highest = max(c.total for c in wrong)
+            for c in wrong:
+                if c.total == highest:
+                    patterns.append((q, c))
+    return patterns
+
+
+def analyze_teaching(exam: Exam, stats: ExamStats):
+    """เสนอแนวทางสอนจากตัวลวงที่พบ โดยไม่อ้างว่ารู้เหตุผลของผู้ตอบ"""
+    from .schemas import TeachingReport
+
+    patterns = teaching_patterns(exam, stats)
+    if not patterns:
+        return TeachingReport(findings=[])
+    blocks = []
+    for q, c in patterns:
+        blocks.append(f"ข้อ {q.id} หัวข้อ: {q.concept}\nคำถาม: {q.question}\n"
+                      f"ตัวเลือกผิด: {c.label} ({c.total}/{stats.n} คน)\n"
+                      f"เฉลย: {scoring.choice_label(q, q.correct_choice)}\nคำอธิบาย: {q.explanation}")
+    report = call_structured(
+        system="คุณเป็นผู้ช่วยครู วิเคราะห์ตัวเลือกผิดที่นักเรียนเลือกบ่อยจากข้อมูลที่ให้ "
+               "สำหรับแต่ละรายการระบุ question_id และ choice ให้ตรงข้อมูลทุกตัวอักษร "
+               "เสนอความเข้าใจผิดที่เป็นไปได้และกิจกรรมสอนซ้ำที่เฉพาะเจาะจง "
+               "ห้ามยืนยันเหตุผลที่นักเรียนเลือกหรือเหมารวมว่านักเรียนทุกคนคิดเหมือนกัน "
+               "ระวังเฉลยผิดหรือคำถามกำกวมและข้อมูลจากกลุ่มเล็ก ตอบภาษาไทย",
+        content=[{"type": "text", "text": "\n\n".join(blocks)}], schema=TeachingReport, effort=EFFORT["analyze"],
+    )
+    allowed = {(q.id, c.label) for q, c in patterns}
+    return report.model_copy(update={"findings": [f for f in report.findings if (f.question_id, f.choice) in allowed]})

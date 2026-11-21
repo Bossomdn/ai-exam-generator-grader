@@ -108,7 +108,16 @@ def show_question_details(exam: Exam, results: list[QuestionResult]) -> None:
             st.markdown(f"**คำตอบของคุณ:** {r.student_answer}")
             if q.type in OBJECTIVE_TYPES:
                 st.markdown(f"**เฉลย:** {scoring.choice_label(q, q.correct_choice)}")
-                st.caption(q.explanation)
+                selected = next((i for i in range(len(q.choices))
+                                 if scoring.choice_label(q, i) == r.student_answer), None)
+                if selected is not None and len(q.choice_explanations) == len(q.choices):
+                    st.markdown(f"**เหตุผลของตัวเลือกที่คุณตอบ:** {q.choice_explanations[selected]}")
+                if len(q.choice_explanations) == len(q.choices):
+                    st.markdown("**เหตุผลของแต่ละตัวเลือก**")
+                    for i, explanation in enumerate(q.choice_explanations):
+                        st.markdown(f"- **{scoring.choice_label(q, i)}:** {explanation}")
+                else:
+                    st.caption(q.explanation)
                 continue
             if r.criteria:
                 st.dataframe(
