@@ -10,17 +10,18 @@
 """
 
 import hashlib
+import json
 import shutil
 import sqlite3
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Iterator, Optional
 
 from . import config, scoring
-from .schemas import OBJECTIVE_TYPES, ClassSession, Exam, RosterEntry, StudentRecord
+from .schemas import OBJECTIVE_TYPES, ClassSession, Exam, ExamForm, RosterEntry, StudentRecord
 
 MIGRATIONS = [
     # เวอร์ชัน 1
@@ -85,6 +86,13 @@ MIGRATIONS = [
         PRIMARY KEY (submission_id, question_id)
     );
     """,
+    # เวอร์ชัน 2: ชุดสลับกันลอก · สอบซ่อม · เกณฑ์ผ่านของแต่ละการสอบ
+    """
+    ALTER TABLE sittings ADD COLUMN forms_json TEXT;    -- ชุดสลับ [ExamForm] NULL = ชุดเดียว
+    ALTER TABLE sittings ADD COLUMN retest_of INTEGER REFERENCES sittings(id);  -- เป็นสอบซ่อมของการสอบไหน
+    ALTER TABLE sittings ADD COLUMN takers_json TEXT;   -- เลขที่ผู้มีสิทธิ์สอบซ่อม NULL = ทั้งห้อง
+    ALTER TABLE sittings ADD COLUMN pass_percent REAL;  -- เกณฑ์ผ่าน (%) NULL = config.PASS_PERCENT
+    """,
 ]
 
 SQLITE_HEADER = b"SQLite format 3\x00"
@@ -118,10 +126,15 @@ class Sitting:
     exam_title: str
     students: int
     graded: int
+    forms: tuple[ExamForm, ...] = ()  # ชุดสลับกันลอก (ว่าง = ชุดเดียว)
+    retest_of: Optional[int] = None  # เป็นสอบซ่อมของการสอบไหน
+    takers: Optional[tuple[str, ...]] = None  # เลขที่ผู้มีสิทธิ์สอบ (สอบซ่อม) None = ทั้งห้อง
+    pass_percent: float = field(default_factory=lambda: config.PASS_PERCENT)
 
     @property
     def label(self) -> str:
-        return f"{self.exam_title} · {self.classroom.name} ภาคเรียน {self.term}/{self.classroom.year}"
+        retest = " (สอบซ่อม)" if self.retest_of else ""
+        return f"{self.exam_title}{retest} · {self.classroom.name} ภาคเรียน {self.term}/{self.classroom.year}"
 
 
 # ---------------- เปิดฐานข้อมูล / อัปเกรดโครงสร้าง ----------------
@@ -298,6 +311,7 @@ def sittings(conn: sqlite3.Connection, sitting_id: Optional[int] = None) -> list
     """การสอบทั้งหมด (ล่าสุดก่อน) หรือเฉพาะ sitting_id"""
     rows = conn.execute(
         f"""SELECT s.id, s.term, e.title, c.id AS classroom_id, c.year, c.grade, c.room,
+                   s.forms_json, s.retest_of, s.takers_json, s.pass_percent,
                    COUNT(sub.id) AS students, COUNT(sub.score) AS graded
             FROM sittings s JOIN exams e ON e.id = s.exam_id JOIN classrooms c ON c.id = s.classroom_id
             LEFT JOIN submissions sub ON sub.sitting_id = s.id
@@ -306,8 +320,14 @@ def sittings(conn: sqlite3.Connection, sitting_id: Optional[int] = None) -> list
         () if sitting_id is None else (sitting_id,),
     ).fetchall()
     return [
-        Sitting(r["id"], Classroom(r["classroom_id"], r["year"], r["grade"], r["room"]), r["term"], r["title"],
-                r["students"], r["graded"])
+        Sitting(
+            r["id"], Classroom(r["classroom_id"], r["year"], r["grade"], r["room"]), r["term"], r["title"],
+            r["students"], r["graded"],
+            forms=tuple(ExamForm.model_validate(f) for f in json.loads(r["forms_json"] or "[]")),
+            retest_of=r["retest_of"],
+            takers=tuple(json.loads(r["takers_json"])) if r["takers_json"] else None,
+            pass_percent=r["pass_percent"] if r["pass_percent"] is not None else config.PASS_PERCENT,
+        )
         for r in rows
     ]
 
@@ -319,6 +339,36 @@ def same_exam_sittings(conn: sqlite3.Connection, sitting_id: int) -> list[Sittin
            WHERE s.id = ? ORDER BY other.id""",
         (sitting_id,),
     ).fetchall()
+    return [sittings(conn, r["id"])[0] for r in rows]
+
+
+def set_forms(conn: sqlite3.Connection, sitting_id: int, forms: list[ExamForm]) -> None:
+    """บันทึกชุดสลับของการสอบนี้ (ไม่เกิน 1 ชุด = ไม่สลับ)"""
+    data = json.dumps([f.model_dump() for f in forms], ensure_ascii=False) if len(forms) > 1 else None
+    with conn:
+        conn.execute("UPDATE sittings SET forms_json = ? WHERE id = ?", (data, sitting_id))
+
+
+def set_pass_percent(conn: sqlite3.Connection, sitting_id: int, percent: float) -> None:
+    with conn:
+        conn.execute("UPDATE sittings SET pass_percent = ? WHERE id = ?", (percent, sitting_id))
+
+
+def open_retest(conn: sqlite3.Connection, exam: Exam, original_id: int, takers: list[str]) -> int:
+    """สร้างการสอบซ่อมของ original_id (ห้องและภาคเรียนเดียวกัน ข้อสอบชุดซ่อม) เฉพาะผู้มีสิทธิ์ตามเลขที่"""
+    original = sittings(conn, original_id)[0]
+    retest_id = open_sitting(conn, exam, original.classroom.id, original.term)
+    with conn:
+        conn.execute(
+            "UPDATE sittings SET retest_of = ?, takers_json = ?, pass_percent = ? WHERE id = ?",
+            (original_id, json.dumps(takers, ensure_ascii=False), original.pass_percent, retest_id),
+        )
+    return retest_id
+
+
+def retests(conn: sqlite3.Connection, sitting_id: int) -> list[Sitting]:
+    """การสอบซ่อมของการสอบนี้ (เก่าก่อน)"""
+    rows = conn.execute("SELECT id FROM sittings WHERE retest_of = ? ORDER BY id", (sitting_id,)).fetchall()
     return [sittings(conn, r["id"])[0] for r in rows]
 
 
@@ -376,31 +426,67 @@ def save_session(conn: sqlite3.Connection, sitting_id: int, session: ClassSessio
 
 # ---------------- ดูคะแนน: รายห้อง / รายคน / รายชั้น (ร้อยละของคะแนนเต็ม เฉพาะคนที่ตรวจแล้ว) ----------------
 
+def _retest_roots(conn: sqlite3.Connection) -> dict[int, int]:
+    """การสอบ → การสอบครั้งแรกที่เป็นต้นทาง (ครั้งแรกชี้ไปที่ตัวเอง ซ่อมซ้ำหลายรอบก็ชี้ไปครั้งแรก)"""
+    parent = {r["id"]: r["retest_of"] for r in conn.execute("SELECT id, retest_of FROM sittings")}
+    roots = {}
+    for sitting_id in parent:
+        root, seen = sitting_id, set()
+        while parent.get(root) is not None and root not in seen:
+            seen.add(root)
+            root = parent[root]
+        roots[sitting_id] = root
+    return roots
+
+
 def classroom_table(conn: sqlite3.Connection, classroom_id: int) -> list[dict]:
-    """แถว = นักเรียน (ตามรายชื่อ + ผู้สอบที่ไม่อยู่ในรายชื่อ), คอลัมน์ = การสอบแต่ละครั้ง, ค่า = ร้อยละ"""
+    """แถว = นักเรียน (ตามรายชื่อ + ผู้สอบที่ไม่อยู่ในรายชื่อ), คอลัมน์ = การสอบแต่ละครั้ง, ค่า = ร้อยละ
+
+    การสอบที่มีสอบซ่อม เพิ่มคอลัมน์ "สอบซ่อม" และ "หลังซ่อม" (ซ่อมได้ไม่เกินเกณฑ์ผ่าน) ค่าเฉลี่ยใช้คะแนนหลังซ่อม"""
     rows = conn.execute(
-        """SELECT s.id AS sitting_id, e.title, s.term, sub.number, sub.name, sub.score, sub.max_score
+        """SELECT s.id AS sitting_id, s.retest_of, s.pass_percent, e.title, s.term,
+                  sub.number, sub.name, sub.score, sub.max_score
            FROM sittings s JOIN exams e ON e.id = s.exam_id JOIN submissions sub ON sub.sitting_id = s.id
            WHERE s.classroom_id = ? ORDER BY s.created_at, s.id, sub.position""",
         (classroom_id,),
     ).fetchall()
-    columns: dict[int, str] = {}
+    roots = _retest_roots(conn)
+    titles: dict[int, str] = {}  # การสอบครั้งแรก → ชื่อคอลัมน์
+    pass_marks: dict[int, float] = {}
     for r in rows:
-        if r["sitting_id"] not in columns:
+        if r["retest_of"] is None and r["sitting_id"] not in titles:
             title = f"{r['title']} (ภาค {r['term']})"
-            columns[r["sitting_id"]] = title if title not in columns.values() else f"{title} #{len(columns) + 1}"
-    table = {e.number: {"เลขที่": e.number, "ชื่อ": e.name} for e in roster(conn, classroom_id)}
+            titles[r["sitting_id"]] = title if title not in titles.values() else f"{title} #{len(titles) + 1}"
+            pass_marks[r["sitting_id"]] = r["pass_percent"] if r["pass_percent"] is not None else config.PASS_PERCENT
+    retested = {roots[r["sitting_id"]] for r in rows if r["retest_of"] is not None} & set(titles)
+    students = {e.number: {"เลขที่": e.number, "ชื่อ": e.name, "first": {}, "retest": {}}
+                for e in roster(conn, classroom_id)}
     for r in rows:
-        row = table.setdefault(r["number"] or r["name"], {"เลขที่": r["number"], "ชื่อ": r["name"]})
-        row[columns[r["sitting_id"]]] = _percent(r["score"], r["max_score"])
+        student = students.setdefault(r["number"] or r["name"],
+                                      {"เลขที่": r["number"], "ชื่อ": r["name"], "first": {}, "retest": {}})
+        percent = _percent(r["score"], r["max_score"])
+        if r["retest_of"] is None:
+            student["first"][r["sitting_id"]] = percent
+        elif percent is not None:  # ซ่อมหลายรอบ ใช้รอบที่ดีที่สุด
+            root = roots[r["sitting_id"]]
+            student["retest"][root] = max(percent, student["retest"].get(root, percent))
     result = []
-    for row in sorted(table.values(), key=lambda row: (_number_order(row["เลขที่"]), row["ชื่อ"])):
-        scores = [row.get(c) for c in columns.values()]
-        done = [s for s in scores if s is not None]
-        result.append({
-            "เลขที่": row["เลขที่"], "ชื่อ": row["ชื่อ"], **dict(zip(columns.values(), scores)),
-            "เฉลี่ย": round(sum(done) / len(done), 1) if done else None,
-        })
+    for s in sorted(students.values(), key=lambda s: (_number_order(s["เลขที่"]), s["ชื่อ"])):
+        row: dict = {"เลขที่": s["เลขที่"], "ชื่อ": s["ชื่อ"]}
+        counted = []
+        for sitting_id, title in titles.items():
+            first = s["first"].get(sitting_id)
+            row[title] = first
+            if sitting_id in retested:
+                retest = s["retest"].get(sitting_id)
+                after = scoring.after_retest(first, retest, pass_marks[sitting_id]) if first is not None else None
+                row[f"{title} สอบซ่อม"] = retest
+                row[f"{title} หลังซ่อม"] = after
+                first = after
+            if first is not None:
+                counted.append(first)
+        row["เฉลี่ย"] = round(sum(counted) / len(counted), 1) if counted else None
+        result.append(row)
     return result
 
 
@@ -417,20 +503,35 @@ def _student_params(conn: sqlite3.Connection, classroom_id: int, key: str) -> di
 
 
 def student_history(conn: sqlite3.Connection, classroom_id: int, key: str) -> list[dict]:
-    """ผลสอบทุกครั้งที่ตรวจแล้วของนักเรียน (key = เลขที่ในห้องนี้ หรือชื่อถ้าไม่มีเลขที่)"""
+    """ผลสอบทุกครั้งที่ตรวจแล้วของนักเรียน (key = เลขที่ในห้องนี้ หรือชื่อถ้าไม่มีเลขที่)
+    มีสอบซ่อม: แถวของครั้งแรกบอกร้อยละหลังซ่อมด้วย"""
     rows = conn.execute(
-        f"""SELECT c.year, s.term, c.grade, c.room, e.title, sub.score, sub.max_score
+        f"""SELECT s.id AS sitting_id, s.retest_of, s.pass_percent, c.year, s.term, c.grade, c.room, e.title,
+                   sub.score, sub.max_score
             FROM submissions sub JOIN sittings s ON s.id = sub.sitting_id
             JOIN classrooms c ON c.id = s.classroom_id JOIN exams e ON e.id = s.exam_id
             WHERE sub.score IS NOT NULL AND {_SAME_STUDENT}
             ORDER BY c.year, s.term, s.created_at""",
         _student_params(conn, classroom_id, key),
     ).fetchall()
-    return [
-        {"ปีการศึกษา": r["year"], "ภาคเรียน": r["term"], "ห้อง": f"{r['grade']}/{r['room']}", "ข้อสอบ": r["title"],
-         "คะแนน": r["score"], "เต็ม": r["max_score"], "ร้อยละ": _percent(r["score"], r["max_score"])}
-        for r in rows
-    ]
+    roots = _retest_roots(conn)
+    best_retest: dict[int, float] = {}
+    for r in rows:
+        if r["retest_of"] is not None:
+            root, percent = roots[r["sitting_id"]], _percent(r["score"], r["max_score"])
+            best_retest[root] = max(percent, best_retest.get(root, percent))
+    history = []
+    for r in rows:
+        percent = _percent(r["score"], r["max_score"])
+        row = {"ปีการศึกษา": r["year"], "ภาคเรียน": r["term"], "ห้อง": f"{r['grade']}/{r['room']}",
+               "ข้อสอบ": r["title"] + (" (สอบซ่อม)" if r["retest_of"] is not None else ""),
+               "คะแนน": r["score"], "เต็ม": r["max_score"], "ร้อยละ": percent}
+        if best_retest:
+            pass_percent = r["pass_percent"] if r["pass_percent"] is not None else config.PASS_PERCENT
+            row["หลังสอบซ่อม"] = (scoring.after_retest(percent, best_retest[r["sitting_id"]], pass_percent)
+                                  if r["sitting_id"] in best_retest else None)
+        history.append(row)
+    return history
 
 
 def student_concepts(conn: sqlite3.Connection, classroom_id: int, key: str) -> list[dict]:
@@ -461,12 +562,12 @@ def _grade_rooms(conn: sqlite3.Connection, year: int, grade: str) -> list[Classr
 
 
 def grade_exam_table(conn: sqlite3.Connection, year: int, grade: str) -> list[dict]:
-    """แถว = ข้อสอบ, คอลัมน์ = ห้องในชั้นนี้, ค่า = ร้อยละเฉลี่ยของห้อง"""
+    """แถว = ข้อสอบ, คอลัมน์ = ห้องในชั้นนี้, ค่า = ร้อยละเฉลี่ยของห้อง (ครั้งแรก ไม่รวมสอบซ่อม ซึ่งสอบเฉพาะคนไม่ผ่าน)"""
     rows = conn.execute(
         """SELECT e.id AS exam_id, e.title, c.id AS classroom_id, AVG(sub.score * 100.0 / sub.max_score) AS avg
            FROM sittings s JOIN exams e ON e.id = s.exam_id JOIN classrooms c ON c.id = s.classroom_id
            JOIN submissions sub ON sub.sitting_id = s.id AND sub.score IS NOT NULL AND sub.max_score > 0
-           WHERE c.year = ? AND c.grade = ? GROUP BY s.id ORDER BY MIN(s.created_at)""",
+           WHERE c.year = ? AND c.grade = ? AND s.retest_of IS NULL GROUP BY s.id ORDER BY MIN(s.created_at)""",
         (year, grade),
     ).fetchall()
     rooms = _grade_rooms(conn, year, grade)
@@ -478,12 +579,12 @@ def grade_exam_table(conn: sqlite3.Connection, year: int, grade: str) -> list[di
 
 
 def grade_concept_table(conn: sqlite3.Connection, year: int, grade: str) -> list[dict]:
-    """แถว = หัวข้อ, คอลัมน์ = ห้อง + ทั้งชั้น, ค่า = ร้อยละ — เรียงจากหัวข้อที่ทั้งชั้นอ่อนที่สุด"""
+    """แถว = หัวข้อ, คอลัมน์ = ห้อง + ทั้งชั้น, ค่า = ร้อยละ (ไม่รวมสอบซ่อม) — เรียงจากหัวข้อที่ทั้งชั้นอ่อนที่สุด"""
     rows = conn.execute(
         """SELECT qs.concept, c.id AS classroom_id, SUM(qs.points) AS points, SUM(qs.max_points) AS max_points
            FROM question_scores qs JOIN submissions sub ON sub.id = qs.submission_id
            JOIN sittings s ON s.id = sub.sitting_id JOIN classrooms c ON c.id = s.classroom_id
-           WHERE c.year = ? AND c.grade = ? GROUP BY qs.concept, c.id""",
+           WHERE c.year = ? AND c.grade = ? AND s.retest_of IS NULL GROUP BY qs.concept, c.id""",
         (year, grade),
     ).fetchall()
     rooms = {c.id: c.name for c in _grade_rooms(conn, year, grade)}

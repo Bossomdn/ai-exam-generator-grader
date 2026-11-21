@@ -15,7 +15,7 @@ import src.item_analyst
 import src.llm
 import src.planner
 import src.reviewer
-from src import answer_reader, class_session, csv_import, school_db
+from src import answer_reader, class_session, csv_import, exam_forms, school_db
 from src.schemas import (
     ClassSession, CriterionScore, Exam, ExamReview, ExamSpec, ExtractedAnswer, ExtractedAnswerSheet, ItemAnalystReport,
     ItemDiagnosis, LearningReport,
@@ -380,3 +380,59 @@ def test_class_tab_item_analysis_revises_exam(app):
     assert [s.agent for s in at.session_state["trace"]] == [
         "Item Analyst", "Question Generator (แก้ไข)", "Quality Reviewer"]
     assert at.session_state["class_session"].exam == exam  # ผลสอบเดิมยังผูกกับข้อสอบฉบับที่ใช้สอบจริง
+
+
+def csv_rows(exam: Exam, rows: list[tuple[str, str, str, bool]], forms=()) -> bytes:
+    """CSV ตามเทมเพลตของแอป: (เลขที่, ชื่อ, ชุด, ตอบถูกไหม) กรอกตามเลขข้อ/ตัวเลือกที่พิมพ์ในชุดนั้น"""
+    lines = [csv_import.template_csv(exam, forms).decode("utf-8-sig").strip()]
+    for number, name, code, right in rows:
+        form = exam_forms.find(list(forms), code)
+        printed = exam_forms.form_exam(exam, form) if form else exam
+        cells = ["กขคง"[q.correct_choice if right else (q.correct_choice + 1) % 4] if q.choices else "ตอบ"
+                 for q in printed.questions]
+        lines.append(",".join([number, name] + ([code] if forms else []) + cells))
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def import_and_grade(at: AppTest, data: bytes, forms=()) -> None:
+    exam = at.session_state["class_session"].exam
+    students = csv_import.parse_responses(exam, data, list(forms)).students
+    at.session_state["class_session"] = class_session.merge_students(at.session_state["class_session"], students)[0]
+    at.run()
+    click(at, f"ตรวจคำตอบที่ยังไม่ได้ตรวจ ({len(students)} คน)")
+
+
+def test_class_forms_then_retest_flows_into_scores(app):
+    at = app
+    exam = Exam(title="ชุดซ่อม", spec_summary="", concepts=["Supervised"], questions=[mcq(1), mcq(2, correct=1)])
+    add_room([RosterEntry(number="1", name="นายเอ"), RosterEntry(number="2", name="นางสาวบี")])
+    start_class(at, exam)
+    first = at.session_state["class_sitting"]
+
+    at.radio(key=f"class_forms_{first.id}_1").set_value(2).run()  # แจก 2 ชุด
+    forms = list(at.session_state["class_sitting"].forms)
+    assert [f.code for f in forms] == ["ก", "ข"]
+    import_and_grade(at, csv_rows(exam, [("1", "นายเอ", "ก", True), ("2", "นางสาวบี", "ข", False)], forms), forms)
+    rows = class_session.score_rows(at.session_state["class_session"])
+    assert [(r["ชื่อ"], r["ชุด"], r["ร้อยละ"]) for r in rows] == [("นายเอ", "ก", 100.0), ("นางสาวบี", "ข", 0.0)]
+    assert at.radio(key=f"class_forms_{first.id}_2").disabled  # นำเข้าแล้ว เปลี่ยนจำนวนชุดไม่ได้
+
+    assert at.multiselect(key=f"retest_takers_{first.id}").value == ["2"]  # ต่ำกว่า 50% เลือกไว้ให้
+    [b for b in at.button if b.label.startswith("🛠️ ออกข้อสอบชุดซ่อม (1 คน)")][0].click().run()
+    assert not at.exception, at.exception
+    retest_sitting = at.session_state["class_sitting"]
+    assert (retest_sitting.retest_of, retest_sitting.takers) == (first.id, ("2",))
+    assert any("ผู้มีสิทธิ์สอบซ่อม 1 คน" in c.value for c in at.caption)
+
+    retest_exam = at.session_state["class_session"].exam
+    assert retest_exam.title == "ชุดซ่อม (ชุดสอบซ่อม)"
+    import_and_grade(at, csv_rows(retest_exam, [("2", "นางสาวบี", "", True)]))
+    assert any("หลังซ่อม" in str(d.value) for d in at.dataframe)  # สรุปคะแนนหลังซ่อม
+
+    with school_db.connect() as conn:
+        room = school_db.classrooms(conn)[0]
+        table = {r["ชื่อ"]: r for r in school_db.classroom_table(conn, room.id)}
+    title = f"ชุดซ่อม (ภาค {first.term})"
+    assert [(table["นางสาวบี"][c]) for c in (title, f"{title} สอบซ่อม", f"{title} หลังซ่อม")] == [0.0, 100.0, 50.0]
+    click(at, "กลับไปการสอบครั้งแรก")
+    assert at.session_state["class_sitting"].id == first.id

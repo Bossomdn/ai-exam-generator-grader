@@ -9,9 +9,9 @@ import io
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from . import answer_reader, scoring
+from . import answer_reader, exam_forms, scoring
 from .grading_graph import grade_exam
-from .schemas import OBJECTIVE_TYPES, ClassSession, Exam, ExtractedAnswerSheet, StudentRecord
+from .schemas import OBJECTIVE_TYPES, ClassSession, Exam, ExamForm, ExtractedAnswerSheet, StudentRecord
 
 NO_NAME_NOTE = "อ่านชื่อผู้สอบไม่ได้ — ใช้ชื่อไฟล์แทน กรุณาแก้ชื่อ"
 NAME_MATCH = 0.6  # ชื่อที่ AI อ่านได้คล้ายชื่อในรายชื่อห้องน้อยกว่านี้ = เลขที่อาจอ่านผิด
@@ -49,9 +49,29 @@ def student_from_sheet(exam: Exam, sheet_name: str, extracted: ExtractedAnswerSh
     )
 
 
-def read_sheet(exam: Exam, sheet: answer_reader.AnswerSheetFile) -> StudentRecord:
-    """ให้ AI อ่านกระดาษคำตอบ 1 คน (เรียก LLM อาจโยน LLMError)"""
-    student = student_from_sheet(exam, sheet.name, answer_reader.read_answers(exam, sheet))
+def read_sheet(exam: Exam, sheet: answer_reader.AnswerSheetFile, forms: list[ExamForm] = (),
+               form_code: str = "") -> StudentRecord:
+    """ให้ AI อ่านกระดาษคำตอบ 1 คน (เรียก LLM อาจโยน LLMError)
+
+    มีชุดสลับ: อ่านด้วยชุดที่ครูเลือก (form_code ว่าง = ไม่ทราบ เริ่มที่ชุดแรก) ถ้ารหัสชุดบนหัวกระดาษเป็นชุดอื่น
+    อ่านใหม่ด้วยชุดนั้น แล้วแปลงคำตอบกลับเป็นข้อสอบต้นฉบับ"""
+    if not forms:
+        student = student_from_sheet(exam, sheet.name, answer_reader.read_answers(exam, sheet))
+    else:
+        form = exam_forms.find(forms, form_code) or forms[0]
+        extracted = answer_reader.read_answers(exam_forms.form_exam(exam, form), sheet)
+        printed = exam_forms.find(forms, extracted.form_code)
+        notes = []
+        if printed and printed.code != form.code:  # กระดาษเป็นชุดอื่น อ่านใหม่ด้วยชุดที่พิมพ์จริง
+            form = printed
+            extracted = answer_reader.read_answers(exam_forms.form_exam(exam, form), sheet)
+        elif printed is None:
+            notes.append(f"อ่านรหัสชุดบนหัวกระดาษไม่ได้ — ตรวจคำตอบตามชุด {form.code} ตรวจดูว่าถูกชุดไหม")
+        student = student_from_sheet(exam_forms.form_exam(exam, form), sheet.name, extracted)
+        student = student.model_copy(update={
+            "answers": exam_forms.to_base(form, student.answers), "form": form.code,
+            "import_notes": notes + student.import_notes,
+        })
     if sheet.truncated:
         note = f"กระดาษมีมากกว่า {answer_reader.MAX_PAGES} หน้า อ่านเฉพาะ {answer_reader.MAX_PAGES} หน้าแรก"
         student = student.model_copy(update={"import_notes": [note] + student.import_notes})
@@ -160,8 +180,11 @@ def status(student: StudentRecord) -> str:
 def score_rows(session: ClassSession) -> list[dict]:
     """ตารางคะแนนรายคน (ใช้แสดงในแอปและส่งออก CSV)"""
     rows = []
+    with_forms = any(s.form for s in session.students)
     for s in session.students:
         row: dict = {"เลขที่": s.student_no, "ชื่อ": s.name}
+        if with_forms:
+            row["ชุด"] = s.form
         if s.results is None:
             row.update({"คะแนนรวม": None, "คะแนนเต็ม": None, "ร้อยละ": None, "ปรนัย": None, "อัตนัย": None,
                         "ให้ครูดู": None})
@@ -183,8 +206,9 @@ def score_rows(session: ClassSession) -> list[dict]:
 
 def scores_csv(session: ClassSession) -> bytes:
     """คะแนนรายคนสำหรับลงสมุดคะแนน"""
-    columns = ["เลขที่", "ชื่อ", "คะแนนรวม", "คะแนนเต็ม", "ร้อยละ", "ปรนัย", "อัตนัย", "สถานะ"]
-    columns += [f"ข้อ {q.id}" for q in session.exam.questions]
+    columns = ["เลขที่", "ชื่อ"] + (["ชุด"] if any(s.form for s in session.students) else [])
+    columns += ["คะแนนรวม", "คะแนนเต็ม", "ร้อยละ", "ปรนัย", "อัตนัย", "สถานะ"]
+    columns += [f"ข้อ {q.id}" for q in session.exam.questions]  # เลขข้อของข้อสอบต้นฉบับ (ชุด ก)
     return table_csv(score_rows(session), columns)
 
 

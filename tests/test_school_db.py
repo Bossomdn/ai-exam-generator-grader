@@ -41,13 +41,27 @@ def test_new_database_is_created_then_upgraded_with_backup(temp_database, monkey
     with school_db.connect() as conn:  # โค้ดเวอร์ชันใหม่เปิดไฟล์เก่า → อัปเกรดให้
         assert conn.execute("PRAGMA user_version").fetchone()[0] == len(original) + 1
         assert [tuple(r) for r in conn.execute("SELECT grade, note FROM classrooms")] == [("ม.4", None)]
-    backups = list((temp_database.parent / "backups").glob("school-before-v2-*.db"))
+    backups = list((temp_database.parent / "backups").glob(f"school-before-v{len(original) + 1}-*.db"))
     assert len(backups) == 1
 
     monkeypatch.setattr(school_db, "MIGRATIONS", original)  # โค้ดเก่าเปิดไฟล์ใหม่ไม่ได้
     with pytest.raises(SchoolDbError, match="เวอร์ชันใหม่กว่า"):
         with school_db.connect():
             pass
+
+
+def test_version_1_file_upgrades_to_forms_and_retests(temp_database, monkeypatch):
+    original = list(school_db.MIGRATIONS)
+    monkeypatch.setattr(school_db, "MIGRATIONS", original[:1])  # ไฟล์จากโค้ดก่อนมีชุดสลับ/สอบซ่อม
+    with school_db.connect() as conn:
+        classroom = room_with_roster(conn)
+        sitting_id = school_db.open_sitting(conn, EXAM, classroom.id, 1)
+        school_db.save_session(conn, sitting_id, ClassSession(exam=EXAM, students=[graded("นายเอ", "1", {1: 0, 2: 1})]))
+    monkeypatch.setattr(school_db, "MIGRATIONS", original)
+    with school_db.connect() as conn:
+        [sitting] = school_db.sittings(conn)
+        assert (sitting.forms, sitting.retest_of, sitting.takers, sitting.pass_percent) == ((), None, None, 50.0)
+        assert school_db.classroom_table(conn, classroom.id)[0]["เฉลี่ย"] == 100.0
 
 
 def test_broken_file_gives_readable_error(temp_database):

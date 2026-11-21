@@ -196,6 +196,9 @@ def room_view(room: Classroom, rows: list[dict]) -> None:
         nav.link(nav.CLASS)
         return
     st.dataframe(rows, hide_index=True)
+    if any(column.endswith("หลังซ่อม") for column in rows[0]):
+        st.caption("การสอบที่มีสอบซ่อม: คอลัมน์ “หลังซ่อม” = คะแนนสอบซ่อมแต่ไม่เกินเกณฑ์ผ่าน และไม่ต่ำกว่าครั้งแรก "
+                   "· ค่าเฉลี่ยใช้คะแนนหลังซ่อม")
     st.download_button("⬇️ ตารางคะแนนห้องนี้ (CSV)", table_csv(rows), mime="text/csv",
                        file_name=f"scores_{room.grade}-{room.room}_{room.year}.csv")
 
@@ -240,7 +243,7 @@ def grade_view() -> None:
     if not exams:
         st.info(f"{grade} ปีการศึกษา {year} ยังไม่มีผลสอบ")
         return
-    st.markdown("**ค่าเฉลี่ยของแต่ละห้อง แยกตามข้อสอบ**")
+    st.markdown("**ค่าเฉลี่ยของแต่ละห้อง แยกตามข้อสอบ** (สอบครั้งแรก ไม่รวมสอบซ่อมซึ่งสอบเฉพาะคนไม่ผ่าน)")
     st.dataframe(exams, hide_index=True)
     st.markdown("**ร้อยละรายหัวข้อ แยกห้อง** (เรียงจากหัวข้อที่ทั้งชั้นอ่อนที่สุด — ช่วยดูว่าควรสอนซ้ำเรื่องไหนที่ห้องใด)")
     st.dataframe(concepts, hide_index=True)

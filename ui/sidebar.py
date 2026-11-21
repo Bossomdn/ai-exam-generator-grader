@@ -16,7 +16,8 @@ def render(ready: bool, ready_message: str) -> None:
         if state.exam:
             st.caption(f"📄 ข้อสอบที่ใช้อยู่: **{state.exam.title}**")
         if state.class_sitting:
-            st.caption(f"🏫 การสอบที่เปิดอยู่: **{state.class_sitting.classroom.name}** "
+            kind = " (สอบซ่อม)" if state.class_sitting.retest_of else ""
+            st.caption(f"🏫 การสอบที่เปิดอยู่{kind}: **{state.class_sitting.classroom.name}** "
                        f"ภาคเรียน {state.class_sitting.term}")
         with st.expander("ระบบนี้ทำงานอย่างไร"):
             st.markdown(
