@@ -1,4 +1,4 @@
-"""ช่องตอบข้อสอบที่ใช้ร่วมกัน: แท็บ 2 (ทำข้อสอบ / ตรวจทานกระดาษ 1 คน) และแท็บ 4 (ตรวจทานกระดาษทั้งห้อง)
+"""ช่องตอบข้อสอบที่ใช้ร่วมกัน: หน้าฝึกทำข้อสอบ (ทำข้อสอบ / ตรวจทานกระดาษ 1 คน) และหน้าสอบทั้งห้อง (ตรวจทานกระดาษทั้งห้อง)
 
 ค่าของแต่ละข้อเก็บใน st.session_state ที่ key "<key_prefix>_<question_id>"
 ปรนัย = index ตัวเลือก (None = ไม่ได้ตอบ), อัตนัย = ข้อความ
@@ -28,7 +28,7 @@ def collect(exam: Exam, key_prefix: str) -> dict[int, Union[int, str, None]]:
 def answer_fields(
     exam: Exam, key_prefix: str, extracted_by_id: Optional[dict[int, ExtractedAnswer]] = None
 ) -> None:
-    """ช่องตอบทุกข้อ (เรียกภายใน st.form) ถ้าส่ง extracted_by_id มา จะแสดงคำเตือนจากการที่ AI อ่านกระดาษรายข้อ"""
+    """ช่องตอบทุกข้อ ถ้าส่ง extracted_by_id มา จะแสดงคำเตือนจากการที่ AI อ่านกระดาษรายข้อ"""
     for q in exam.questions:
         st.markdown(f"**ข้อ {q.id}.** {q.question}")
         st.caption(f"{TYPE_LABELS[q.type]} · {q.points:g} คะแนน")

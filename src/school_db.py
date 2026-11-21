@@ -138,7 +138,7 @@ def connect(path: Optional[Path] = None) -> Iterator[sqlite3.Connection]:
             conn.execute("PRAGMA foreign_keys = ON")
             _migrate(conn, path)
         except sqlite3.DatabaseError as e:
-            raise SchoolDbError(f"เปิดฐานข้อมูล {path} ไม่ได้ ({e}) — กู้คืนจากไฟล์สำรองได้ที่แท็บ 5") from e
+            raise SchoolDbError(f"เปิดฐานข้อมูล {path} ไม่ได้ ({e}) — กู้คืนจากไฟล์สำรองได้ที่หน้าสำรองและย้ายเครื่อง") from e
         yield conn
     finally:
         conn.close()

@@ -1,0 +1,17 @@
+# หน้าตาแอป: ฟอนต์ไทย Sarabun จาก Google Fonts (ไม่มีอินเทอร์เน็ตจะใช้ฟอนต์ sans-serif ของเครื่องแทน) และสีโทนน้ำเงิน
+[theme]
+base = "light"
+primaryColor = "#2554C7"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F2F5FB"
+textColor = "#1F2937"
+font = "Sarabun:https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap, sans-serif"
+baseFontSize = 16
+baseRadius = "medium"
+
+[theme.sidebar]
+backgroundColor = "#EEF2FA"
+
+[global]
+# common.keep_inputs ตั้งค่าช่องกรอกผ่าน session_state ทุกรอบ (ให้ค่าอยู่ต่อเมื่อสลับหน้า) ไม่ต้องเตือนใน log
+disableWidgetStateDuplicationWarning = true
