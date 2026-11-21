@@ -106,8 +106,15 @@ def revise_section(exam: Exam, stats: ExamStats, saved: dict, ready: bool) -> No
     if not issues:
         st.caption("Item Analyst แนะนำให้ใช้ทุกข้อต่อ ไม่ต้องแก้")
         return
+    # ครูเป็นคนตัดสินว่าจะแก้ข้อไหน ระบบเลือกข้อที่ Item Analyst แนะนำไว้ให้ก่อน
+    chosen = st.multiselect(
+        "ข้อที่จะให้ปรับปรุง (เอาข้อที่ไม่อยากแก้ออกได้)", sorted(issues), default=sorted(issues),
+        format_func=lambda i: f"ข้อ {i}", key="item_revise_ids_" + "_".join(map(str, saved["key"])),
+    )
+    issues = {i: issues[i] for i in chosen}
+    suggestions = {i: suggestions[i] for i in chosen if i in suggestions}
     label = f"🛠️ ปรับปรุงข้อสอบตามคำแนะนำ ({len(issues)} ข้อ) — Question Generator แก้ → Quality Reviewer ตรวจ"
-    if st.button(label, disabled=not ready):
+    if st.button(label, disabled=not ready or not issues):
         # ใช้เนื้อหาเดิมถ้าข้อสอบนี้สร้างในรอบนี้ ไม่งั้นใช้ชื่อชุดและหัวข้อแทน (ข้อสอบที่เปิดจากฐานข้อมูล)
         source = state.source if state.exam == exam and state.source else sources.from_topic(
             f"{exam.title}: {', '.join(exam.concepts)}")
@@ -119,10 +126,10 @@ def revise_section(exam: Exam, stats: ExamStats, saved: dict, ready: bool) -> No
                                          prior_steps=[step], on_step=on_step),
         )
         if result:
-            state.item_revision = {"key": saved["key"], "result": result, "source": source}
+            state.item_revision = {"key": saved["key"], "result": result, "source": source, "ids": sorted(issues)}
     revision = state.item_revision
     if revision and revision["key"] == saved["key"]:
-        show_revision(exam, revision["result"], sorted(issues))
+        show_revision(exam, revision["result"], revision["ids"])
         if state.exam is not None and state.exam.questions == revision["result"].exam.questions:
             st.success("ใช้ฉบับปรับปรุงแล้ว · ใช้สอบห้องถัดไป: ปิดการสอบนี้ (ด้านบน) แล้วเริ่มใหม่")
             nav.link(nav.CREATE, "ดูเฉลย / พิมพ์ฉบับปรับปรุง")

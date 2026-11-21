@@ -91,11 +91,15 @@ def finalize_subjective(question: Question, grade: SubjectiveGrade, answer: str)
     known = subjective_criteria(question)
     criteria: list[CriterionScore] = []
     unverified: list[str] = []
+    used: set[str] = set()
     for index, c in enumerate(grade.criteria):
         match = _match_criterion(c.criterion, index, known)
         if match is None:  # เกณฑ์ที่ไม่มีอยู่จริง ไม่นับคะแนน
             continue
         name, max_pts = match
+        if name in used:
+            continue
+        used.add(name)
         awarded = min(max(c.points_awarded, 0.0), max_pts)
         criteria.append(c.model_copy(update={"criterion": name, "points_awarded": awarded, "max_points": max_pts}))
         if c.evidence.strip() and not quote_in_answer(c.evidence, answer):
