@@ -124,6 +124,31 @@ class SubjectiveGrade(BaseModel):
     feedback: str
 
 
+class ModeratedGrade(BaseModel):
+    """ผลตัดสินของ Moderator เมื่อคณะผู้ตรวจให้คะแนนต่างกันมาก"""
+    rationale: str = Field(description="เหตุผลที่ตัดสินแบบนี้: เห็นด้วยกับผู้ตรวจคนไหนในเกณฑ์ใด โดยอ้างหลักฐานจากคำตอบ")
+    criteria: list[CriterionScore]
+    missed_key_points: list[str]
+    misconceptions: list[str]
+    feedback: str
+
+
+class PanelGrade(BaseModel):
+    """คะแนนจากผู้ตรวจ 1 คนในคณะ (โค้ดสร้าง)"""
+    grader: str  # มุมมองของผู้ตรวจ เช่น "เนื้อหา"
+    points: float
+    criteria: list[CriterionScore]
+
+
+class PanelVerdict(BaseModel):
+    """สรุปการตรวจข้อหนึ่งของคณะผู้ตรวจ (โค้ดสร้าง)"""
+    grades: list[PanelGrade]
+    spread: float  # คะแนนสูงสุด − ต่ำสุดในคณะ
+    decision: Literal["agreed", "moderated"]  # เห็นตรงกัน (ใช้คะแนนกลาง) / Moderator ตัดสิน
+    rationale: str = ""  # เหตุผลของ Moderator
+    needs_teacher: bool = False  # เห็นต่างมากจนควรให้ครูตรวจซ้ำ
+
+
 # ---------- คำตอบที่ถอดจากกระดาษคำตอบ (ผลลัพธ์จาก answer reader) ----------
 
 class ExtractedAnswer(BaseModel):
@@ -158,6 +183,7 @@ class QuestionResult(BaseModel):
     missed_key_points: list[str] = []
     misconceptions: list[str] = []
     unverified_evidence: list[str] = []  # quote ที่ grader อ้าง แต่หาไม่พบในคำตอบจริง
+    panel: Optional[PanelVerdict] = None  # เรียงความที่ตรวจด้วยคณะผู้ตรวจ
 
 
 class ConceptMastery(BaseModel):

@@ -4,7 +4,7 @@ import streamlit as st
 
 from src import answer_reader, scoring
 from src.advisor import advise
-from src.grader import grade_exam
+from src.grading_graph import grade_exam
 from src.llm import LLMError
 from src.schemas import Exam
 
@@ -32,7 +32,7 @@ def render(ready: bool) -> None:
             answers = {q.id: state.get(f"ans_{v}_{q.id}") for q in exam.questions}
             state.files.pop("report", None)
             try:
-                with st.spinner("กำลังตรวจคำตอบ..."):
+                with st.spinner("กำลังตรวจคำตอบ (เรียงความใช้คณะผู้ตรวจ 3 คน อาจใช้เวลาสักครู่)..."):
                     state.results = grade_exam(exam, answers)
                     state.mastery = scoring.concept_mastery(state.results)
                 with st.spinner("กำลังวิเคราะห์จุดที่ต้องเรียนเพิ่ม..."):

@@ -30,6 +30,12 @@ def render(ready: bool, ready_message: str) -> None:
             "- Question Generator — ออกข้อสอบ + เฉลย + เกณฑ์\n"
             f"- Quality Reviewer — ทำข้อสอบเองโดยไม่เห็นเฉลย หาจุดบกพร่อง แล้วส่งกลับแก้ (สูงสุด {config.MAX_REVISIONS} รอบ)"
         )
+        st.markdown(
+            "**Agent ฝั่งตรวจเรียงความ**\n"
+            "- ผู้ตรวจ 3 มุมมอง (เนื้อหา / เหตุผล / ยึดเกณฑ์) — ให้คะแนนพร้อมกันโดยไม่เห็นผลของกันและกัน\n"
+            "- Moderator — ตัดสินเมื่อคะแนนต่างกันมาก ข้อที่ต่างกันมากเกินไปส่งให้ครูตรวจซ้ำ"
+            + ("" if config.GRADER_MODE == "panel" else "\n\n(ปิดอยู่: `GRADER_MODE=single` ใช้ผู้ตรวจคนเดียว)")
+        )
         if st.button("เริ่มใหม่ทั้งหมด"):
             state.clear()
             st.rerun()

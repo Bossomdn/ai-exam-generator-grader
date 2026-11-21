@@ -107,6 +107,7 @@ def test_create_take_grade_and_practice(app):
     click(at, "ส่งคำตอบให้ตรวจ")
     assert [(r.question_id, r.points_awarded) for r in at.session_state["results"]] == [(1, 1), (2, 0), (3, 2)]
     assert any("ต้องเรียนเพิ่ม" in p.proto.text for p in at.get("progress"))
+    assert any("คณะผู้ตรวจ" in c.value and "เห็นตรงกัน" in c.value for c in at.caption)  # เรียงความตรวจด้วยคณะ
 
     click(at, "สร้างแบบฝึกเพิ่มเรื่องที่อ่อน")
     assert at.session_state["version"] == v + 1 and at.session_state["results"] is None
@@ -171,6 +172,7 @@ def test_class_tab_imports_and_grades_whole_class(app):
     rows = class_session.score_rows(at.session_state["class_session"])
     # นายเอ: ข้อ 1 ถูก (1) + ข้อ 2 ตอบ ค (0) + เรียงความ (คะแนนเต็มข้อนี้ 1 จึงได้ไม่เกิน 1) = 2
     assert [(r["ชื่อ"], r["คะแนนรวม"], r["สถานะ"]) for r in rows] == [("นายเอ", 2, "ตรวจแล้ว"), ("นางบี", 0, "ตรวจแล้ว")]
+    assert [r["ให้ครูดู"] for r in rows] == [0, 0]
     assert any("เฉลี่ย" in c.value for c in at.caption)
     with school_db.connect() as conn:  # บันทึกลงฐานข้อมูลแล้ว
         table = school_db.classroom_table(conn, room.id)

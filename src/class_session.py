@@ -10,7 +10,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from . import answer_reader, scoring
-from .grader import grade_exam
+from .grading_graph import grade_exam
 from .schemas import OBJECTIVE_TYPES, ClassSession, Exam, ExtractedAnswerSheet, StudentRecord
 
 NO_NAME_NOTE = "อ่านชื่อผู้สอบไม่ได้ — ใช้ชื่อไฟล์แทน กรุณาแก้ชื่อ"
@@ -163,7 +163,8 @@ def score_rows(session: ClassSession) -> list[dict]:
     for s in session.students:
         row: dict = {"เลขที่": s.student_no, "ชื่อ": s.name}
         if s.results is None:
-            row.update({"คะแนนรวม": None, "คะแนนเต็ม": None, "ร้อยละ": None, "ปรนัย": None, "อัตนัย": None})
+            row.update({"คะแนนรวม": None, "คะแนนเต็ม": None, "ร้อยละ": None, "ปรนัย": None, "อัตนัย": None,
+                        "ให้ครูดู": None})
         else:
             t = scoring.totals(s.results)
             row.update({
@@ -172,6 +173,7 @@ def score_rows(session: ClassSession) -> list[dict]:
                 "ร้อยละ": round(100 * t["score"] / t["max"], 1) if t["max"] else 0.0,
                 "ปรนัย": t["objective_score"],
                 "อัตนัย": t["subjective_score"],
+                "ให้ครูดู": sum(1 for r in s.results if r.panel and r.panel.needs_teacher),  # ข้อที่คณะผู้ตรวจเห็นต่างมาก
             })
             row.update({f"ข้อ {r.question_id}": r.points_awarded for r in s.results})
         row["สถานะ"] = status(s)

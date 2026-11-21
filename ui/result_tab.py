@@ -7,7 +7,7 @@ import streamlit as st
 from src import config, export, scoring
 from src.schemas import OBJECTIVE_TYPES, ConceptMastery, Exam, LearningReport, QuestionResult
 
-from .common import run_with_progress, set_exam, state
+from .common import run_with_progress, set_exam, show_panel, state
 
 
 def render(ready: bool) -> None:
@@ -118,6 +118,7 @@ def show_question_details(exam: Exam, results: list[QuestionResult]) -> None:
                     } for c in r.criteria],
                     hide_index=True,
                 )
+            show_panel(r)
             if r.unverified_evidence:
                 st.warning(
                     "ผู้ตรวจอ้างข้อความที่ไม่พบในคำตอบจริง ควรให้ผู้สอนตรวจซ้ำ: "
