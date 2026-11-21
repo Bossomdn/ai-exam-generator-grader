@@ -21,11 +21,13 @@ DEFAULTS = {
     "sheet": None,  # กระดาษคำตอบที่อัปโหลด {"version", "file": AnswerSheetFile, "result": ExtractedAnswerSheet}
     # โหมดครู (แท็บ 4): ข้อมูลทั้งห้องผูกกับข้อสอบของตัวเอง จึงไม่ถูกล้างเมื่อสร้างข้อสอบชุดใหม่
     "class_session": None,  # ClassSession (บันทึกลงฐานข้อมูลทุกครั้งที่เปลี่ยน)
+    "class_saved_session": None,  # ข้อมูลที่อ่าน/บันทึกล่าสุดสำหรับตรวจการแก้พร้อมกัน
     "class_sitting": None,  # school_db.Sitting: การสอบนี้คือห้องไหน ภาคเรียนอะไร
     "class_import": None,  # สรุปการนำเข้าครั้งล่าสุด
     "class_upload_n": 0,  # เปลี่ยน key ของช่องอัปโหลดเพื่อล้างไฟล์หลังนำเข้าแล้ว
     "class_review_n": 0,  # เปลี่ยน key ของฟอร์มตรวจทานเมื่อข้อมูลห้องเปลี่ยน (กันค่าเก่าค้าง)
     "class_images": {},  # ภาพกระดาษคำตอบ {sheet_name: [PNG]} (ไม่บันทึกลงฐานข้อมูล เพราะใหญ่)
+    "class_item_work": None,
     "class_exam_pdf": None,  # PDF ข้อสอบของห้องนี้สำหรับพิมพ์
     # แท็บ 5: ห้องเรียนและคะแนน
     "school_notice": None,  # (ข้อความสำเร็จ, [คำเตือน]) จากการนำเข้ารายชื่อ / กู้คืน
@@ -82,7 +84,9 @@ def panel_text(result: QuestionResult) -> str:
         return ""
     scores = " / ".join(f"{g.points:g}" for g in panel.grades)
     text = f"{scores} → " + ("ตรงกัน" if panel.decision == "agreed" else "Moderator ตัดสิน")
-    return text + (" ⚠️ ให้ครูดู" if panel.needs_teacher else "")
+    if result.teacher_review:
+        return f"{text} · ครูยืนยัน {result.points_awarded:g}"
+    return text + (" ⚠️ ให้ครูดู" if result.needs_teacher_review else "")
 
 
 def show_panel(result: QuestionResult) -> None:
@@ -95,6 +99,10 @@ def show_panel(result: QuestionResult) -> None:
         st.caption(f"คณะผู้ตรวจ: {scores} — เห็นตรงกัน (ต่างกัน {panel.spread:g} คะแนน) ใช้ผลของผู้ตรวจที่ให้คะแนนกลาง")
     else:
         st.caption(f"คณะผู้ตรวจ: {scores} — เห็นต่าง {panel.spread:g} คะแนน จึงให้ Moderator ตัดสิน")
-        st.markdown(f"**Moderator ตัดสิน {result.points_awarded:g}/{result.max_points:g}:** {panel.rationale}")
-    if panel.needs_teacher:
+        ai_points = result.teacher_review.ai_points if result.teacher_review else result.points_awarded
+        st.markdown(f"**Moderator ตัดสิน {ai_points:g}/{result.max_points:g}:** {panel.rationale}")
+    if result.teacher_review:
+        st.markdown(f"**คะแนนที่ครูยืนยัน {result.points_awarded:g}/{result.max_points:g}**")
+        st.text(result.teacher_review.note)
+    if result.needs_teacher_review:
         st.warning("ผู้ตรวจให้คะแนนต่างกันมาก ควรให้ผู้สอนตรวจข้อนี้ซ้ำ")

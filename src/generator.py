@@ -45,11 +45,11 @@ REVISE_PROMPT = f"""คุณคือ Question Generator หน้าที่�
 {RULES}"""
 
 
-def _clean(exam: Exam) -> Exam:
+def _clean(exam: Exam, *, renumber: bool = True) -> Exam:
     """แก้ปัญหาเล็ก ๆ ที่โมเดลอาจพลาด เพื่อให้ตรวจด้วยโค้ดได้แน่นอน"""
     questions = []
     for number, q in enumerate(exam.questions, start=1):
-        update: dict = {"id": number}
+        update: dict = {"id": number} if renumber else {}
         if q.type == "true_false":
             update["choices"] = ["ถูก", "ผิด"]
         if q.type in ("short_answer", "essay"):
@@ -144,7 +144,7 @@ def apply_revisions(exam: Exam, revised: list[Question], ids: list[int]) -> tupl
         if new.concept not in exam.concepts:
             update["concept"] = q.concept
         questions.append(new.model_copy(update=update))
-    return _clean(exam.model_copy(update={"questions": questions})), sorted(by_id)
+    return _clean(exam.model_copy(update={"questions": questions}), renumber=False), sorted(by_id)
 
 
 def revise_questions(
