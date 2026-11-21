@@ -42,11 +42,11 @@ def render(ready: bool) -> None:
         show_exam(state.exam)
 
 
-def choose_source() -> Optional[Source]:
-    mode = st.radio("แหล่งเนื้อหา", ["อัปโหลดสไลด์/เอกสาร", "ใช้เนื้อหาตัวอย่าง", "พิมพ์หัวข้ออย่างเดียว"], horizontal=True)
+def choose_source(*, key_prefix: str = "create") -> Optional[Source]:
+    mode = st.radio("แหล่งเนื้อหา", ["อัปโหลดสไลด์/เอกสาร", "ใช้เนื้อหาตัวอย่าง", "พิมพ์หัวข้ออย่างเดียว"], horizontal=True, key=f"{key_prefix}_source_mode")
     source = None
     if mode == "อัปโหลดสไลด์/เอกสาร":
-        uploaded = st.file_uploader("ไฟล์สไลด์หรือเอกสาร", type=["pptx", "pdf", "txt", "md"])
+        uploaded = st.file_uploader("ไฟล์สไลด์หรือเอกสาร", type=["pptx", "pdf", "txt", "md"], key=f"{key_prefix}_source_file")
         if uploaded:
             try:
                 source = load_upload(uploaded.name, uploaded.getvalue())
@@ -60,7 +60,8 @@ def choose_source() -> Optional[Source]:
         with st.expander("ดูเนื้อหาตัวอย่าง (Machine Learning เบื้องต้น)"):
             st.text(source.text)
     else:
-        topic = st.text_input("หัวข้อที่จะออกสอบ", placeholder="เช่น ระบบสุริยะ, Python เบื้องต้น, เศรษฐศาสตร์จุลภาค")
+        topic = st.text_input("หัวข้อที่จะออกสอบ", placeholder="เช่น ระบบสุริยะ, Python เบื้องต้น, เศรษฐศาสตร์จุลภาค",
+                              key=f"{key_prefix}_source_topic")
         if topic.strip():
             source = from_topic(topic)
     return source

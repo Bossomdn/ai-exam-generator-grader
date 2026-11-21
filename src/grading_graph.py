@@ -11,11 +11,11 @@
 
 import operator
 from concurrent.futures import ThreadPoolExecutor
-from typing import Annotated, Optional, TypedDict, Union
+from typing import Annotated, Literal, Optional, TypedDict, Union
 
 from langgraph.graph import END, START, StateGraph
 
-from . import config, grader, scoring
+from . import config, grader, scoring, teacher_review
 from .schemas import OBJECTIVE_TYPES, Exam, PanelGrade, PanelVerdict, Question, QuestionResult, SubjectiveGrade
 
 Answer = Union[int, str, None]  # ปรนัย = index ตัวเลือก, อัตนัย = ข้อความ
@@ -27,6 +27,7 @@ NODE_IDS = {"เนื้อหา": "grader_content", "เหตุผล": "gr
 class PanelState(TypedDict, total=False):
     question: Question
     answer: str
+    guidance: tuple[str, ...]
     grades: Annotated[list[tuple[str, SubjectiveGrade]], operator.add]  # (มุมมอง, ผลตรวจ) ของผู้ตรวจแต่ละคน
     panel: list[PanelGrade]  # คะแนนของแต่ละคนหลังโค้ดตรวจเกณฑ์/คะแนนเต็มแล้ว
     spread: float
@@ -35,7 +36,8 @@ class PanelState(TypedDict, total=False):
 
 def _grader_node(perspective: str):
     def node(state: PanelState) -> dict:
-        return {"grades": [(perspective, grader.call_grader(state["question"], state["answer"], perspective))]}
+        grade = grader.call_grader(state["question"], state["answer"], perspective, guidance=state["guidance"])
+        return {"grades": [(perspective, grade)]}
     return node
 
 
@@ -62,7 +64,7 @@ def compare(state: PanelState) -> dict:
 
 def moderator(state: PanelState) -> dict:
     question, answer, spread = state["question"], state["answer"], state["spread"]
-    decided = grader.moderate(question, answer, _ordered(state))
+    decided = grader.moderate(question, answer, _ordered(state), guidance=state["guidance"])
     grade = SubjectiveGrade(criteria=decided.criteria, missed_key_points=decided.missed_key_points,
                             misconceptions=decided.misconceptions, feedback=decided.feedback)
     verdict = PanelVerdict(
@@ -92,16 +94,27 @@ def build_graph():
 GRAPH = build_graph()
 
 
-def grade_answer(question: Question, answer: str) -> QuestionResult:
+def grade_answer(
+    question: Question, answer: str, *,
+    mode: Literal["single", "panel"] | None = None,
+    guidance: tuple[str, ...] = (),
+    review_with_teacher: bool = False,
+) -> QuestionResult:
     """ตรวจอัตนัย 1 ข้อ: เรียงความใช้คณะผู้ตรวจ (ถ้าเปิดไว้) ชนิดอื่นใช้ผู้ตรวจคนเดียว — อาจโยน LLMError"""
     if not answer.strip():
         return scoring.unanswered_result(question)
-    if config.GRADER_MODE != "panel" or question.type not in config.PANEL_TYPES:
+    if (mode or config.GRADER_MODE) != "panel" or question.type not in config.PANEL_TYPES:
         return grader.grade_subjective(question, answer)
-    return GRAPH.invoke({"question": question, "answer": answer})["result"]
+    result = GRAPH.invoke({"question": question, "answer": answer, "guidance": guidance})["result"]
+    if review_with_teacher and result.needs_teacher_review:
+        return teacher_review.pause(question, result)
+    return result
 
 
-def grade_exam(exam: Exam, answers: dict[int, Answer]) -> list[QuestionResult]:
+def grade_exam(
+    exam: Exam, answers: dict[int, Answer], *, guidance: dict[int, tuple[str, ...]] | None = None,
+    review_with_teacher: bool = False,
+) -> list[QuestionResult]:
     """ตรวจทั้งชุด: ปรนัยด้วยโค้ด อัตนัยหลายข้อพร้อมกัน"""
     results = []
     subjective = []
@@ -112,6 +125,12 @@ def grade_exam(exam: Exam, answers: dict[int, Answer]) -> list[QuestionResult]:
         else:
             subjective.append(q)
     with ThreadPoolExecutor(max_workers=config.GRADING_WORKERS) as pool:
-        futures = [pool.submit(grade_answer, q, str(answers.get(q.id) or "")) for q in subjective]
+        futures = [
+            pool.submit(
+                grade_answer, q, str(answers.get(q.id) or ""),
+                guidance=(guidance or {}).get(q.id, ()), review_with_teacher=review_with_teacher,
+            )
+            for q in subjective
+        ]
         results.extend(f.result() for f in futures)
     return sorted(results, key=lambda r: r.question_id)

@@ -334,9 +334,15 @@ def load_session(conn: sqlite3.Connection, sitting_id: int) -> tuple[Sitting, Cl
     return sittings(conn, sitting_id)[0], session
 
 
-def save_session(conn: sqlite3.Connection, sitting_id: int, session: ClassSession) -> None:
+def save_session(
+    conn: sqlite3.Connection, sitting_id: int, session: ClassSession, *, expected: ClassSession | None = None
+) -> None:
     """บันทึกผู้สอบทั้งห้องของการสอบนี้ (แทนที่ของเดิมทั้งหมดในครั้งเดียว)"""
     with conn:
+        if expected is not None:
+            conn.execute("BEGIN IMMEDIATE")
+            if load_session(conn, sitting_id)[1] != expected:
+                raise SchoolDbError("ข้อมูลการสอบเปลี่ยนไปแล้ว ระบบโหลดข้อมูลล่าสุด กรุณาตรวจสอบก่อนบันทึกอีกครั้ง")
         classroom_id = _sitting_classroom(conn, sitting_id)
         enrolled = {
             r["number"]: r["student_id"]
@@ -362,6 +368,19 @@ def save_session(conn: sqlite3.Connection, sitting_id: int, session: ClassSessio
                     for r in s.results or []
                 ],
             )
+
+
+def objective_scores(conn: sqlite3.Connection, sitting_id: int) -> list[tuple[int, int, int | None, int]]:
+    """คะแนนปรนัยรายข้อพร้อมตัวเลือก สำหรับคำนวณสถิติของการสอบครั้งนี้"""
+    return [
+        tuple(row)
+        for row in conn.execute(
+            """SELECT q.submission_id, q.question_id, q.choice, q.is_correct
+               FROM question_scores q JOIN submissions s ON s.id = q.submission_id
+               WHERE s.sitting_id = ? AND q.is_correct IN (0, 1)""",
+            (sitting_id,),
+        )
+    ]
 
 
 # ---------------- ดูคะแนน: รายห้อง / รายคน / รายชั้น (ร้อยละของคะแนนเต็ม เฉพาะคนที่ตรวจแล้ว) ----------------
