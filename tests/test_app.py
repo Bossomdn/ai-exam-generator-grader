@@ -11,12 +11,14 @@ from streamlit.testing.v1 import AppTest
 import src.advisor
 import src.generator
 import src.grader
+import src.item_analyst
 import src.llm
 import src.planner
 import src.reviewer
 from src import answer_reader, class_session, csv_import, school_db
 from src.schemas import (
-    ClassSession, CriterionScore, Exam, ExamReview, ExamSpec, ExtractedAnswer, ExtractedAnswerSheet, LearningReport,
+    ClassSession, CriterionScore, Exam, ExamReview, ExamSpec, ExtractedAnswer, ExtractedAnswerSheet, ItemAnalystReport,
+    ItemDiagnosis, LearningReport,
     Question, QuestionReview, RevisedQuestions, RosterEntry, RubricCriterion, SectionSpec, StudentRecord,
     SubjectiveGrade, WeakTopic,
 )
@@ -65,13 +67,19 @@ def fake_llm(*, system, content, schema, effort):
             weak_topics=[WeakTopic(concept="Overfitting", why="w", review=["สไลด์ 2"], actions=["a"])],
             practice_prompt="ปรนัย 3 ข้อ เรื่อง Overfitting",
         )
+    if schema is ItemAnalystReport:  # ข้อแรกที่ส่งมาให้แก้ ข้ออื่นใช้ต่อ
+        ids = [int(i) for i in re.findall(r'<item id="(\d+)"', text)]
+        return ItemAnalystReport(summary="บางข้อควรปรับ", items=[
+            ItemDiagnosis(question_id=i, diagnosis=f"วินิจฉัยข้อ {i}", action="keep" if n else "revise",
+                          suggestion="" if n else "เปลี่ยนตัวลวงที่ไม่มีคนเลือก")
+            for n, i in enumerate(ids)])
     raise AssertionError(f"ไม่ได้เตรียมคำตอบของ {schema.__name__}")
 
 
 @pytest.fixture
 def app(monkeypatch) -> AppTest:
     monkeypatch.setattr(src.llm, "check_ready", lambda: (True, "พร้อม (จำลอง)"))
-    for module in (src.planner, src.generator, src.reviewer, src.grader, src.advisor):
+    for module in (src.planner, src.generator, src.reviewer, src.grader, src.advisor, src.item_analyst):
         monkeypatch.setattr(module, "call_structured", fake_llm)
     at = AppTest.from_file(APP, default_timeout=60)
     at.run()
@@ -275,8 +283,42 @@ def test_school_tab_adds_room_and_shows_scores(app):
     assert at.session_state["school_backup"].startswith(b"SQLite format 3")
 
 
-def test_class_teacher_review_and_item_revision(app, monkeypatch):
-    from src import item_analysis, scoring
+def test_class_tab_item_analysis_revises_exam(app):
+    at = app
+    exam = Exam(title="ชุดวิเคราะห์", spec_summary="", concepts=["Supervised", "Overfitting"],
+                questions=[mcq(1), mcq(2), ESSAY])
+    add_room()
+    start_class(at, exam)
+    filled = csv_import.template_csv(exam).decode("utf-8-sig") + "1,เอ,ก,ก1,ตอบ\n2,บี,ข,ข,\n3,ซี,ก,ค,ตอบ\n"
+    at.session_state["class_session"] = class_session.merge_students(
+        at.session_state["class_session"], csv_import.parse_responses(exam, filled.encode("utf-8")).students)[0]
+    at.run()
+    click(at, "ตรวจคำตอบที่ยังไม่ได้ตรวจ (3 คน)")
+    assert any("ผู้สอบที่ตรวจแล้ว **3 คน**" in m.value for m in at.markdown)
+
+    [b for b in at.button if b.label.startswith("🔍 ให้ Item Analyst")][0].click().run()
+    assert not at.exception, at.exception
+    assert any("บางข้อควรปรับ" in i.value for i in at.info)
+    # ครูเลือกข้อที่จะแก้ได้: เอาออกหมดแล้วปุ่มกดไม่ได้ ใส่กลับแล้วแก้ได้
+    chosen = next(m for m in at.multiselect if m.label.startswith("ข้อที่จะให้ปรับปรุง"))
+    flagged = list(chosen.value)
+    assert len(flagged) == 1
+    chosen.set_value([]).run()
+    assert next(b for b in at.button if b.label.startswith("🛠️ ปรับปรุงข้อสอบตามคำแนะนำ (0 ข้อ)")).disabled
+    next(m for m in at.multiselect if m.label.startswith("ข้อที่จะให้ปรับปรุง")).set_value(flagged).run()
+    [b for b in at.button if b.label.startswith("🛠️ ปรับปรุงข้อสอบตามคำแนะนำ (1 ข้อ)")][0].click().run()
+    assert not at.exception, at.exception
+    assert any("ก่อนแก้" in c.value for c in at.caption) and any("Reviewer ตรวจผ่าน" in m.value for m in at.markdown)
+
+    click(at, "ใช้ข้อสอบฉบับปรับปรุง (ดูเฉลย / พิมพ์ที่แท็บ 1)")
+    assert at.session_state["exam"].title == "ชุดวิเคราะห์ (ฉบับปรับปรุงจากผลสอบ)"
+    assert [s.agent for s in at.session_state["trace"]] == [
+        "Item Analyst", "Question Generator (แก้ไข)", "Quality Reviewer"]
+    assert at.session_state["class_session"].exam == exam  # ผลสอบเดิมยังผูกกับข้อสอบฉบับที่ใช้สอบจริง
+
+
+def test_class_teacher_review_confirms_essay_score(app):
+    from src import scoring
     from src.schemas import PanelVerdict
     from src.sources import from_topic
 
@@ -310,12 +352,3 @@ def test_class_teacher_review_and_item_revision(app, monkeypatch):
     assert saved.students[0].results[-1].points_awarded == 3
     assert not any("คะแนนชั่วคราว" in c.value for c in at.caption)
 
-    monkeypatch.setattr(item_analysis, "call_structured", lambda **_: item_analysis.AnalystReport(recommendations=[
-        item_analysis.Recommendation(question_id=2, action="revise", reason="ตรวจเฉลย", suggestion="เปลี่ยนเฉลย"),
-    ]))
-    click(at, "ขอข้อเสนอแนะจาก Item Analyst")
-    next(m for m in at.multiselect if m.label == "ข้อที่จะสร้างฉบับปรับปรุง").set_value([2]).run()
-    click(at, "สร้างร่างฉบับปรับปรุง")
-    click(at, "เปิดร่างในแท็บสร้างข้อสอบ")
-    assert at.session_state["exam"].questions[1].correct_choice == 0
-    assert at.session_state["class_session"].exam == exam

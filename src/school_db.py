@@ -312,6 +312,16 @@ def sittings(conn: sqlite3.Connection, sitting_id: Optional[int] = None) -> list
     ]
 
 
+def same_exam_sittings(conn: sqlite3.Connection, sitting_id: int) -> list[Sitting]:
+    """การสอบทุกห้องที่ใช้ข้อสอบชุดเดียวกับ sitting_id (รวมตัวเอง) ใช้รวมผลหลายห้องตอนวิเคราะห์ข้อสอบ"""
+    rows = conn.execute(
+        """SELECT other.id FROM sittings s JOIN sittings other ON other.exam_id = s.exam_id
+           WHERE s.id = ? ORDER BY other.id""",
+        (sitting_id,),
+    ).fetchall()
+    return [sittings(conn, r["id"])[0] for r in rows]
+
+
 def _sitting_classroom(conn: sqlite3.Connection, sitting_id: int) -> int:
     row = conn.execute("SELECT classroom_id FROM sittings WHERE id = ?", (sitting_id,)).fetchone()
     if row is None:
@@ -368,19 +378,6 @@ def save_session(
                     for r in s.results or []
                 ],
             )
-
-
-def objective_scores(conn: sqlite3.Connection, sitting_id: int) -> list[tuple[int, int, int | None, int]]:
-    """คะแนนปรนัยรายข้อพร้อมตัวเลือก สำหรับคำนวณสถิติของการสอบครั้งนี้"""
-    return [
-        tuple(row)
-        for row in conn.execute(
-            """SELECT q.submission_id, q.question_id, q.choice, q.is_correct
-               FROM question_scores q JOIN submissions s ON s.id = q.submission_id
-               WHERE s.sitting_id = ? AND q.is_correct IN (0, 1)""",
-            (sitting_id,),
-        )
-    ]
 
 
 # ---------------- ดูคะแนน: รายห้อง / รายคน / รายชั้น (ร้อยละของคะแนนเต็ม เฉพาะคนที่ตรวจแล้ว) ----------------

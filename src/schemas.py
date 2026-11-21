@@ -255,3 +255,19 @@ class RosterEntry(BaseModel):
     number: str  # เลขที่
     name: str
     code: str = ""  # รหัสนักเรียน (ใช้เชื่อมคนเดิมข้ามปีการศึกษา) ไม่มีได้
+
+
+# ---------- วิเคราะห์ข้อสอบจากผลสอบจริง (ผลลัพธ์จาก Item Analyst) ----------
+
+class ItemDiagnosis(BaseModel):
+    question_id: int
+    diagnosis: str = Field(description="สาเหตุที่น่าจะทำให้ข้อนี้มีปัญหา โดยอ้างตัวเลขสถิติและตัวเลือกที่นักเรียนเลือก")
+    action: Literal["keep", "revise", "rewrite"] = Field(
+        description="keep = ใช้ต่อได้, revise = ปรับบางส่วน (คำถาม/ตัวเลือก/เฉลย), rewrite = เขียนข้อใหม่วัดหัวข้อเดิม"
+    )
+    suggestion: str = Field(description="วิธีแก้แบบเจาะจง ถ้า keep ให้เป็น ''")
+
+
+class ItemAnalystReport(BaseModel):
+    summary: str = Field(description="ภาพรวมคุณภาพข้อสอบชุดนี้จากผลสอบจริง 2–3 ประโยค")
+    items: list[ItemDiagnosis] = Field(description="เฉพาะข้อที่ส่งมาให้วิเคราะห์ ครบทุกข้อ")

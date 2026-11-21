@@ -1,5 +1,5 @@
 """แท็บ 4 (ครู): เลือกห้อง → พิมพ์ข้อสอบ → สอบบนกระดาษ → อัปโหลดกระดาษคำตอบทีละหลายใบ (หรือ CSV)
-→ AI อ่านคำตอบ → ครูตรวจทาน → ตรวจทั้งห้อง → ตารางคะแนน
+→ AI อ่านคำตอบ → ครูตรวจทาน → ตรวจทั้งห้อง → ตารางคะแนน → วิเคราะห์ข้อสอบจากผลจริง (ui/analysis_section.py)
 
 ทุกการเปลี่ยนแปลงบันทึกลงฐานข้อมูล (src/school_db.py) ทันที ปิดแล้วเปิดกลับมาทำต่อได้"""
 
@@ -12,7 +12,7 @@ from src.class_session import normalize_no
 from src.llm import LLMError
 from src.schemas import OBJECTIVE_TYPES, TYPE_LABELS, ClassSession, Exam, StudentRecord
 
-from . import item_tab
+from . import analysis_section
 from .answer_form import answer_fields, collect, prefill
 from .common import panel_text, show_panel, state, use_exam
 
@@ -42,7 +42,9 @@ def render(ready: bool) -> None:
     st.markdown("#### 4. ตรวจและดูคะแนน")
     grade_section(ready)
     teacher_review_section()
-    item_tab.render(ready)
+    if any(s.results is not None for s in state.class_session.students):
+        st.markdown("#### 5. วิเคราะห์ข้อสอบจากผลสอบจริง")
+        analysis_section.render(ready)
     close_section()
 
 
@@ -52,7 +54,7 @@ def reset_class(session: ClassSession | None, sitting: school_db.Sitting | None 
     state.class_import = None
     state.class_images = {}
     state.class_exam_pdf = None
-    state.class_item_work = None
+    state.item_report = state.item_revision = None
     state.class_review_n += 1
 
 

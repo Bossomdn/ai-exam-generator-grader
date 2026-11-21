@@ -5,7 +5,7 @@
 
 from .config import EFFORT, MAX_QUESTIONS
 from .llm import call_structured
-from .schemas import DIFFICULTY_LABELS, TYPE_LABELS, ExamSpec, SectionSpec
+from .schemas import DIFFICULTY_LABELS, TYPE_LABELS, Exam, ExamSpec, SectionSpec
 from .sources import Source
 
 DEFAULT_POINTS = {"mcq": 1.0, "true_false": 1.0, "short_answer": 3.0, "essay": 10.0}
@@ -77,3 +77,19 @@ def plan_exam(source: Source, user_prompt: str) -> ExamSpec:
     ]
     spec = call_structured(system=SYSTEM_PROMPT, content=content, schema=ExamSpec, effort=EFFORT["plan"])
     return normalize_spec(spec)
+
+
+def spec_from_exam(exam: Exam) -> ExamSpec:
+    """สเปกย้อนจากข้อสอบที่มีอยู่ (ใช้เมื่อแก้ข้อสอบที่เปิดจากฐานข้อมูล ซึ่งไม่มีสเปกเดิมเก็บไว้)"""
+    sections = []
+    for kind in TYPE_LABELS:
+        questions = [q for q in exam.questions if q.type == kind]
+        if not questions:
+            continue
+        points = [q.points for q in questions]
+        levels = {q.difficulty for q in questions}
+        sections.append(SectionSpec(
+            type=kind, count=len(questions), points_each=max(set(points), key=points.count),  # คะแนนที่พบบ่อยสุด
+            difficulty=levels.pop() if len(levels) == 1 else "mixed",
+        ))
+    return ExamSpec(title=exam.title, sections=sections, focus=exam.spec_summary, concepts=exam.concepts, assumptions=[])
