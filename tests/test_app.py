@@ -299,6 +299,13 @@ def test_class_tab_item_analysis_revises_exam(app):
     [b for b in at.button if b.label.startswith("🔍 ให้ Item Analyst")][0].click().run()
     assert not at.exception, at.exception
     assert any("บางข้อควรปรับ" in i.value for i in at.info)
+    # ครูเลือกข้อที่จะแก้ได้: เอาออกหมดแล้วปุ่มกดไม่ได้ ใส่กลับแล้วแก้ได้
+    chosen = next(m for m in at.multiselect if m.label.startswith("ข้อที่จะให้ปรับปรุง"))
+    flagged = list(chosen.value)
+    assert len(flagged) == 1
+    chosen.set_value([]).run()
+    assert next(b for b in at.button if b.label.startswith("🛠️ ปรับปรุงข้อสอบตามคำแนะนำ (0 ข้อ)")).disabled
+    next(m for m in at.multiselect if m.label.startswith("ข้อที่จะให้ปรับปรุง")).set_value(flagged).run()
     [b for b in at.button if b.label.startswith("🛠️ ปรับปรุงข้อสอบตามคำแนะนำ (1 ข้อ)")][0].click().run()
     assert not at.exception, at.exception
     assert any("ก่อนแก้" in c.value for c in at.caption) and any("Reviewer ตรวจผ่าน" in m.value for m in at.markdown)
@@ -308,3 +315,40 @@ def test_class_tab_item_analysis_revises_exam(app):
     assert [s.agent for s in at.session_state["trace"]] == [
         "Item Analyst", "Question Generator (แก้ไข)", "Quality Reviewer"]
     assert at.session_state["class_session"].exam == exam  # ผลสอบเดิมยังผูกกับข้อสอบฉบับที่ใช้สอบจริง
+
+
+def test_class_teacher_review_confirms_essay_score(app):
+    from src import scoring
+    from src.schemas import PanelVerdict
+    from src.sources import from_topic
+
+    at = app
+    essay = ESSAY.model_copy(update={"points": 4})
+    exam = Exam(title="ชุดตรวจทาน", spec_summary="", concepts=["Supervised", "Overfitting"],
+                questions=[mcq(1), mcq(2, correct=1), essay])
+    student = class_session.grade_student(exam, StudentRecord(
+        name="นักเรียนทดสอบ", student_no="1", answers={1: 0, 2: 0}, source="csv",
+    ))
+    provisional = scoring.unanswered_result(essay).model_copy(update={
+        "student_answer": "ตัวอย่าง",
+        "panel": PanelVerdict(grades=[], spread=3, decision="moderated", needs_teacher=True),
+    })
+    student = student.model_copy(update={"results": student.results[:2] + [provisional]})
+    room = add_room()
+    with school_db.connect() as conn:
+        sitting = school_db.open_sitting(conn, exam, room.id, 1)
+        school_db.save_session(conn, sitting, ClassSession(exam=exam, students=[student]))
+    at.session_state["exam"] = exam
+    at.session_state["source"] = from_topic("ML")
+    at.run()
+    click(at, "เปิดการสอบนี้")
+    assert any("คะแนนชั่วคราว" in c.value for c in at.caption)
+
+    next(n for n in at.number_input if n.label.startswith("เนื้อหา")).set_value(3.0)
+    next(t for t in at.text_area if t.label == "เหตุผลที่ยืนยันหรือแก้คะแนน").set_value("ตรวจทานครบแล้ว")
+    click(at, "ยืนยันคะแนนของครู")
+    with school_db.connect() as conn:
+        saved = school_db.load_session(conn, sitting)[1]
+    assert saved.students[0].results[-1].points_awarded == 3
+    assert not any("คะแนนชั่วคราว" in c.value for c in at.caption)
+

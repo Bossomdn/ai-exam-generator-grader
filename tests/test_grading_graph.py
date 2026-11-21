@@ -83,7 +83,7 @@ def test_disagreement_is_settled_by_moderator(panel):
 
 def test_large_disagreement_is_flagged_for_teacher_and_moderator_is_checked(panel):
     panel({"เนื้อหา": 1, "เหตุผล": 9, "เกณฑ์": 5}, moderator_points=12, moderator_evidence="ข้อความที่ไม่มีจริง")
-    result = grading_graph.grade_answer(ESSAY, ANSWER)
+    result = grading_graph.grade_answer(ESSAY, ANSWER, review_with_teacher=True)
     assert result.panel.needs_teacher and result.panel.spread == 8
     assert result.points_awarded == 10  # โค้ดจำกัดไม่ให้เกินคะแนนเต็ม
     assert result.unverified_evidence == ["ข้อความที่ไม่มีจริง"]
