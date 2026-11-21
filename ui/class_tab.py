@@ -4,13 +4,14 @@
 แถบขั้นตอนด้านบนบอกว่าทำถึงไหน ขั้นที่เสร็จแล้วพับเก็บ ขั้นที่ต้องทำต่อเปิดไว้
 ทุกการเปลี่ยนแปลงบันทึกลงฐานข้อมูล (src/school_db.py) ทันที ปิดแล้วเปิดกลับมาทำต่อได้"""
 
+import sqlite3
 from dataclasses import dataclass
 
 import streamlit as st
 
 from src import (
     answer_reader, class_session, config, csv_import, exam_forms, export, item_analysis, retest, school_db, scoring,
-    sources,
+    sources, teacher_review,
 )
 from src.class_session import normalize_no
 from src.llm import LLMError
@@ -76,17 +77,19 @@ def class_steps(session: ClassSession, sitting: school_db.Sitting) -> list[Step]
     waiting = len(class_session.awaiting_review(session))
     pending = len(class_session.ready_to_grade(session))
     graded = sum(1 for s in session.students if s.results is not None)
-    finished = graded > 0 and not waiting and not pending
+    teacher = len(teacher_review.pending(session))  # เรียงความที่คณะผู้ตรวจเห็นต่างมาก รอครูตัดสิน
+    finished = graded > 0 and not waiting and not pending and not teacher
     imported = "done" if n else "now"
     reviewed = "todo" if not n else "now" if waiting else "done"
-    scored = "now" if pending else "done" if n and graded == n else "todo"
+    scored = "now" if pending or teacher else "done" if n and graded == n else "todo"
+    score_detail = f"ตรวจแล้ว {graded}/{n}" + (f" · รอครูตัดสิน {teacher} ข้อ" if teacher else "")
     steps = [
         Step("พิมพ์ข้อสอบไปสอบ", "พิมพ์ข้อสอบ", "done" if n or state.class_exam_pdf else "todo",
              f"{len(sitting.forms)} ชุดสลับ" if sitting.forms else "ไม่บังคับ", expanded=not n),
         Step("นำเข้าคำตอบ", "นำเข้าคำตอบ", imported, f"{n} คน" if n else "สแกนกระดาษ / CSV", expanded=not n),
         Step("ตรวจทานคำตอบที่ AI อ่าน", "ตรวจทาน", reviewed, f"รอ {waiting} คน" if waiting else "ครบแล้ว" if n else "",
              shown=bool(waiting), expanded=True),
-        Step("ตรวจและดูคะแนน", "ตรวจคะแนน", scored, f"ตรวจแล้ว {graded}/{n}" if n else "", shown=bool(n),
+        Step("ตรวจและดูคะแนน", "ตรวจคะแนน", scored, score_detail if n else "", shown=bool(n),
              expanded=bool(pending or graded)),
     ]
     if sitting.retest_of:
@@ -116,7 +119,7 @@ def show_stepper(steps: list[Step]) -> None:
 
 
 def reset_class(session: ClassSession | None, sitting: school_db.Sitting | None = None) -> None:
-    state.class_session = session
+    state.class_session = state.class_saved_session = session
     state.class_sitting = sitting
     state.class_import = None
     state.class_images = {}
@@ -165,9 +168,23 @@ def open_sitting(sitting_id: int) -> None:
 
 def save(session: ClassSession) -> None:
     """เก็บข้อมูลห้องในแอป และบันทึกลงฐานข้อมูลทันที"""
-    state.class_session = session
-    with school_db.connect() as conn:
-        school_db.save_session(conn, state.class_sitting.id, session)
+    try:
+        with school_db.connect() as conn:
+            school_db.save_session(conn, state.class_sitting.id, session, expected=state.class_saved_session)
+    except school_db.SchoolDbError as e:
+        st.error(str(e))
+        try:
+            with school_db.connect() as conn:
+                state.class_sitting, state.class_session = school_db.load_session(conn, state.class_sitting.id)
+            state.class_saved_session = state.class_session
+            state.class_review_n += 1
+        except school_db.SchoolDbError:
+            reset_class(None)
+        st.stop()
+    except sqlite3.Error as e:
+        st.error(f"บันทึกการสอบไม่สำเร็จ ({e}) กรุณาลองอีกครั้ง")
+        st.stop()
+    state.class_session = state.class_saved_session = session
 
 
 def roster_names() -> dict[str, str]:
@@ -487,6 +504,8 @@ def grade_section(ready: bool) -> None:
     session = state.class_session
     rows = class_session.score_rows(session)
     st.dataframe(rows, hide_index=True)
+    if teacher_review.pending(session):
+        st.caption("คะแนนของผู้สอบที่รอครูตัดสินเป็นคะแนนชั่วคราว")
     percents = [r["ร้อยละ"] for r in rows if r["ร้อยละ"] is not None]
     if percents:
         st.caption(
@@ -506,16 +525,18 @@ def grade_section(ready: bool) -> None:
     )
     if choice is not None:
         show_student(session.exam, session.students[choice])
+    teacher_review_section()
 
 
 def grade_all(indices: list[int]) -> None:
     """ตรวจทีละคน เก็บผลทันทีหลังตรวจแต่ละคน ถ้าล้มกลางทาง คนที่ตรวจแล้วไม่หาย"""
     bar = st.progress(0.0)
+    guidance = teacher_review.grading_guidance(state.class_session)
     for n, i in enumerate(indices):
         student = state.class_session.students[i]
         bar.progress(n / len(indices), text=f"กำลังตรวจ {student.name} ({n + 1}/{len(indices)})")
         try:
-            graded = class_session.grade_student(state.class_session.exam, student)
+            graded = class_session.grade_student(state.class_session.exam, student, guidance=guidance)
         except LLMError as e:
             st.error(f"ตรวจของ {student.name} ไม่สำเร็จ: {e} — คนที่ตรวจแล้วเก็บไว้แล้ว กดตรวจต่อได้")
             return
@@ -560,6 +581,55 @@ def show_student(exam: Exam, student: StudentRecord) -> None:
             show_panel(r)
 
 
+def teacher_review_section() -> None:
+    session = state.class_session
+    pending = teacher_review.pending(session)
+    if not pending:
+        return
+    with st.expander(f"คิวตัดสินคะแนนเรียงความ ({len(pending)} ข้อ)", expanded=True):
+        selected = st.selectbox(
+            "คำตอบที่รอครูตัดสิน", range(len(pending)),
+            format_func=lambda i: f"{session.students[pending[i][0]].name} · ข้อ {pending[i][1].question_id}",
+            key=f"teacher_queue_{state.class_review_n}",
+        )
+        student_index, result = pending[selected]
+        question = next(q for q in session.exam.questions if q.id == result.question_id)
+        st.markdown(question.question)
+        st.text(result.student_answer)
+        show_panel(result)
+        criteria = {c.criterion: c.points_awarded for c in result.criteria}
+        with st.form(f"teacher_{state.class_review_n}_{student_index}_{question.id}"):
+            scores = [
+                st.number_input(
+                    f"{name} ({maximum:g} คะแนน) — {description}",
+                    min_value=0.0, max_value=float(maximum),
+                    value=min(maximum, criteria.get(name, 0.0)), step=0.5,
+                    key=f"teacher_score_{state.class_review_n}_{student_index}_{question.id}_{i}",
+                )
+                for i, (name, description, maximum) in enumerate(scoring.subjective_criteria(question))
+            ]
+            note = st.text_area("เหตุผลที่ยืนยันหรือแก้คะแนน", max_chars=600)
+            guidance = st.text_area(
+                "แนวทางให้ AI ตรวจข้อนี้ในห้องนี้ (ถ้ามี)", max_chars=600,
+                help="ระบุวิธีใช้เกณฑ์กับคำตอบอื่น ๆ โดยละชื่อและรายละเอียดของนักเรียน",
+            )
+            anchor = st.text_area(
+                "ตัวอย่างคำตอบที่ลบข้อมูลระบุตัวตนแล้ว (ถ้ามี)", max_chars=600,
+                help="ระบบจะใช้ตัวอย่างนี้พร้อมคะแนนรายเกณฑ์ของครูช่วยตรวจคำตอบอื่นในห้องนี้",
+            )
+            if st.form_submit_button("ยืนยันคะแนนของครู", type="primary"):
+                try:
+                    updated = teacher_review.resolve(question, result, scores, note, guidance, anchor)
+                except ValueError as e:
+                    st.error(str(e))
+                    return
+                student = session.students[student_index]
+                results = [updated if r.question_id == question.id else r for r in student.results]
+                save(class_session.update_student(session, student_index, student.model_copy(update={"results": results})))
+                state.class_review_n += 1
+                st.rerun()
+
+
 # ---------------- สอบซ่อม ----------------
 
 def retest_section(ready: bool) -> None:
@@ -573,6 +643,8 @@ def retest_section(ready: bool) -> None:
             state.class_sitting = school_db.sittings(conn, sitting.id)[0]
         st.rerun()
     st.caption(f"คะแนนหลังสอบซ่อม = คะแนนสอบซ่อมแต่ไม่เกิน {pass_percent:g}% และไม่ต่ำกว่าครั้งแรก")
+    if waiting := len(teacher_review.pending(session)):
+        st.warning(f"ยังมีเรียงความรอครูตัดสิน {waiting} ข้อ (ขั้นที่ 4) รายชื่อผู้สอบซ่อมด้านล่างคิดจากคะแนนชั่วคราว")
     with school_db.connect() as conn:
         done = school_db.retests(conn, sitting.id)
         retest_sessions = [school_db.load_session(conn, r.id)[1] for r in done]

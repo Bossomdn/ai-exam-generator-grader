@@ -394,9 +394,15 @@ def load_session(conn: sqlite3.Connection, sitting_id: int) -> tuple[Sitting, Cl
     return sittings(conn, sitting_id)[0], session
 
 
-def save_session(conn: sqlite3.Connection, sitting_id: int, session: ClassSession) -> None:
+def save_session(
+    conn: sqlite3.Connection, sitting_id: int, session: ClassSession, *, expected: ClassSession | None = None
+) -> None:
     """บันทึกผู้สอบทั้งห้องของการสอบนี้ (แทนที่ของเดิมทั้งหมดในครั้งเดียว)"""
     with conn:
+        if expected is not None:
+            conn.execute("BEGIN IMMEDIATE")
+            if load_session(conn, sitting_id)[1] != expected:
+                raise SchoolDbError("ข้อมูลการสอบเปลี่ยนไปแล้ว ระบบโหลดข้อมูลล่าสุด กรุณาตรวจสอบก่อนบันทึกอีกครั้ง")
         classroom_id = _sitting_classroom(conn, sitting_id)
         enrolled = {
             r["number"]: r["student_id"]

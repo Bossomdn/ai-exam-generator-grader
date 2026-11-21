@@ -166,15 +166,20 @@ def needs_llm(exam: Exam) -> bool:
     return any(q.type not in OBJECTIVE_TYPES for q in exam.questions)
 
 
-def grade_student(exam: Exam, student: StudentRecord) -> StudentRecord:
+def grade_student(
+    exam: Exam, student: StudentRecord, *, guidance: dict[int, tuple[str, ...]] | None = None
+) -> StudentRecord:
     """ปรนัยตรวจด้วยโค้ด อัตนัยตรวจด้วย grader (เรียก LLM) — อาจโยน LLMError"""
-    return student.model_copy(update={"results": grade_exam(exam, student.answers)})
+    results = grade_exam(exam, student.answers, guidance=guidance, review_with_teacher=True)
+    return student.model_copy(update={"results": results})
 
 
 def status(student: StudentRecord) -> str:
     if not student.reviewed:
         return "รอตรวจทาน"
-    return "ยังไม่ได้ตรวจ" if student.results is None else "ตรวจแล้ว"
+    if student.results is None:
+        return "ยังไม่ได้ตรวจ"
+    return "รอครูตัดสินคะแนน" if any(r.needs_teacher_review for r in student.results) else "ตรวจแล้ว"
 
 
 def score_rows(session: ClassSession) -> list[dict]:
@@ -196,7 +201,7 @@ def score_rows(session: ClassSession) -> list[dict]:
                 "ร้อยละ": round(100 * t["score"] / t["max"], 1) if t["max"] else 0.0,
                 "ปรนัย": t["objective_score"],
                 "อัตนัย": t["subjective_score"],
-                "ให้ครูดู": sum(1 for r in s.results if r.panel and r.panel.needs_teacher),  # ข้อที่คณะผู้ตรวจเห็นต่างมาก
+                "ให้ครูดู": sum(1 for r in s.results if r.needs_teacher_review),  # ข้อที่คณะผู้ตรวจเห็นต่างมาก
             })
             row.update({f"ข้อ {r.question_id}": r.points_awarded for r in s.results})
         row["สถานะ"] = status(s)

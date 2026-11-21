@@ -170,6 +170,13 @@ class ExtractedAnswerSheet(BaseModel):
 
 # ---------- ผลรายข้อ (โค้ดสร้าง ไม่ใช่ LLM) ----------
 
+class TeacherReview(BaseModel):
+    ai_points: float
+    note: str
+    guidance: str = ""
+    anchor_answer: str = ""
+
+
 class QuestionResult(BaseModel):
     question_id: int
     type: QuestionType
@@ -185,6 +192,11 @@ class QuestionResult(BaseModel):
     misconceptions: list[str] = []
     unverified_evidence: list[str] = []  # quote ที่ grader อ้าง แต่หาไม่พบในคำตอบจริง
     panel: Optional[PanelVerdict] = None  # เรียงความที่ตรวจด้วยคณะผู้ตรวจ
+    teacher_review: Optional[TeacherReview] = None
+
+    @property
+    def needs_teacher_review(self) -> bool:
+        return bool(self.panel and self.panel.needs_teacher and self.teacher_review is None)
 
 
 class ConceptMastery(BaseModel):
