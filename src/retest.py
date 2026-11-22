@@ -56,12 +56,15 @@ def retest_spec(exam: Exam, concepts: Optional[list[str]] = None):
     """สเปกของข้อสอบครั้งแรก + คำสั่งให้เป็นข้อสอบคู่ขนานที่ไม่ใช้คำถามเดิม"""
     spec = planner.spec_from_exam(exam)
     stems = "\n".join(f"- {q.question[:100]}" for q in exam.questions)
+    if concepts is None:
+        target = "วัดหัวข้อเดิม ชนิด จำนวนข้อ คะแนน และระดับความยากเท่าข้อสอบครั้งแรก"
+    else:  # ชุดเฉพาะบุคคล
+        target = (f"ชุดเฉพาะบุคคล วัดเฉพาะหัวข้อ {', '.join(concepts)} กระจายข้อให้ครอบคลุมหัวข้อเหล่านี้ "
+                  "โดยชนิด จำนวนข้อ คะแนน และระดับความยากเท่าข้อสอบครั้งแรก")
     focus = (
-        f"{spec.focus}\n\nข้อสอบชุดสอบซ่อม (ข้อสอบคู่ขนาน): วัดหัวข้อเดิม ชนิด จำนวนข้อ คะแนน และระดับความยากเท่าข้อสอบครั้งแรก "
+        f"{spec.focus}\n\nข้อสอบชุดสอบซ่อม (ข้อสอบคู่ขนาน): {target} "
         "แต่ห้ามใช้คำถาม ตัวอย่าง ตัวเลข หรือสถานการณ์เดิม คำถามในข้อสอบครั้งแรก:\n" + stems
     ).strip()
-    if concepts is not None:
-        focus += "\nชุดเฉพาะบุคคล: ออกเฉพาะหัวข้อที่ระบุ กระจายข้อให้ครอบคลุมหัวข้อเหล่านี้"
     return spec.model_copy(update={"title": exam.title + TITLE_SUFFIX, "focus": focus,
                                    "concepts": concepts if concepts is not None else spec.concepts})
 

@@ -92,7 +92,9 @@ def show_report(report: LearningReport, mastery: list[ConceptMastery], ready: bo
             st.switch_page(nav.PRACTICE)
 
 
-def show_question_details(exam: Exam, results: list[QuestionResult]) -> None:
+def show_question_details(exam: Exam, results: list[QuestionResult], *, teacher: bool = False) -> None:
+    """teacher=True: ใช้ในหน้าครู (เรียกผู้สอบว่านักเรียนแทน "คุณ")"""
+    who = "นักเรียน" if teacher else "คุณ"
     st.subheader("รายละเอียดรายข้อ")
     questions = {q.id: q for q in exam.questions}
     for r in results:
@@ -105,13 +107,13 @@ def show_question_details(exam: Exam, results: list[QuestionResult]) -> None:
             icon = "🟡"
         with st.expander(f"{icon} ข้อ {r.question_id} · {r.points_awarded:g}/{r.max_points:g} คะแนน · {r.concept}"):
             st.markdown(q.question)
-            st.markdown(f"**คำตอบของคุณ:** {r.student_answer}")
+            st.markdown(f"**คำตอบของ{who}:** {r.student_answer}")
             if q.type in OBJECTIVE_TYPES:
                 st.markdown(f"**เฉลย:** {scoring.choice_label(q, q.correct_choice)}")
                 selected = next((i for i in range(len(q.choices))
                                  if scoring.choice_label(q, i) == r.student_answer), None)
                 if selected is not None and len(q.choice_explanations) == len(q.choices):
-                    st.markdown(f"**เหตุผลของตัวเลือกที่คุณตอบ:** {q.choice_explanations[selected]}")
+                    st.markdown(f"**เหตุผลของตัวเลือกที่{who}ตอบ:** {q.choice_explanations[selected]}")
                 if len(q.choice_explanations) == len(q.choices):
                     st.markdown("**เหตุผลของแต่ละตัวเลือก**")
                     for i, explanation in enumerate(q.choice_explanations):

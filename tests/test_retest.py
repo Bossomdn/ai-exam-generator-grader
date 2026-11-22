@@ -108,6 +108,7 @@ def test_personal_retest_uses_only_student_weak_concepts(monkeypatch):
     assert retest.weak_concepts(other, 50) == ["A"]
     spec = retest.retest_spec(exam, retest.weak_concepts(student, 50))
     assert spec.concepts == ["B"] and sum(s.count for s in spec.sections) == 4
+    assert "วัดเฉพาะหัวข้อ B" in spec.focus and "วัดหัวข้อเดิม" not in spec.focus  # คำสั่งไม่ขัดกันเอง
 
     def fake_generation(source, *, spec, on_step=None):
         return GenerationResult(exam=exam, spec=spec, quality=[], rounds=0, trace=[])

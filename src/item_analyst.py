@@ -8,7 +8,7 @@ from . import scoring
 from .config import EFFORT
 from .item_analysis import ExamStats, ItemStat
 from .llm import call_structured
-from .schemas import Exam, ItemAnalystReport, ItemDiagnosis, Question
+from .schemas import Exam, ItemAnalystReport, ItemDiagnosis, Question, TeachingReport
 
 SYSTEM_PROMPT = """คุณคือ Item Analyst ผู้เชี่ยวชาญการวัดผลการศึกษา หน้าที่คือวิเคราะห์ข้อสอบจากผลสอบจริงของนักเรียน
 ข้อมูลที่ได้รับคือข้อที่ระบบพบความผิดปกติ พร้อมเฉลย ค่าความยาก (p) ค่าอำนาจจำแนก (r) และจำนวนคนที่เลือกแต่ละตัวเลือก
@@ -105,8 +105,6 @@ def teaching_patterns(exam: Exam, stats: ExamStats):
 
 def analyze_teaching(exam: Exam, stats: ExamStats):
     """เสนอแนวทางสอนจากตัวลวงที่พบ โดยไม่อ้างว่ารู้เหตุผลของผู้ตอบ"""
-    from .schemas import TeachingReport
-
     patterns = teaching_patterns(exam, stats)
     if not patterns:
         return TeachingReport(findings=[])

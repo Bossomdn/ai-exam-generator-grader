@@ -82,11 +82,13 @@ def teaching_section(exam: Exam, stats: ExamStats, ready: bool) -> None:
     if st.button("วิเคราะห์ความเข้าใจผิดและแนวทางสอนซ้ำ", disabled=not ready):
         try:
             with st.spinner("กำลังวิเคราะห์แนวทางสอน..."):
-                st.session_state["teaching_report"] = (key, item_analyst.analyze_teaching(exam, stats))
+                state.teaching_report = (key, item_analyst.analyze_teaching(exam, stats))
         except LLMError as e:
             st.error(str(e))
-    saved = st.session_state.get("teaching_report")
+    saved = state.teaching_report
     if saved and saved[0] == key:
+        if not saved[1].findings:  # ทุกรายการที่ AI ตอบไม่ตรงข้อ/ตัวเลือกในตาราง ถูกกรองทิ้ง
+            st.info("AI ไม่ได้ตอบตรงกับข้อและตัวเลือกในตาราง ลองกดวิเคราะห์อีกครั้ง")
         for finding in saved[1].findings:
             st.markdown(f"**ข้อ {finding.question_id} · {finding.choice}**\n\n"
                         f"ความเข้าใจผิดที่เป็นไปได้: {finding.misconception}\n\n"
