@@ -485,3 +485,38 @@ def test_class_teacher_review_confirms_essay_score(app):
     assert not any("คะแนนชั่วคราว" in c.value for c in at.caption)
     assert not any("ตรวจคะแนน" in s for s in current_steps(at))
     assert not any(provisional_warning in w.value for w in at.warning)
+
+    # หน้ารายคนของครู: ผลคณะผู้ตรวจขึ้นครั้งเดียว และเรียกผู้สอบว่า "นักเรียน" ไม่ใช่ "คุณ"
+    next(s for s in at.selectbox if s.label == "ดูรายละเอียดรายคน").set_value(0).run()
+    texts = [m.value for m in at.markdown]
+    assert sum("คะแนนที่ครูยืนยัน" in t for t in texts) == 1
+    assert any("คำตอบของนักเรียน" in t for t in texts) and not any("คำตอบของคุณ" in t for t in texts)
+
+
+def test_personal_retest_opens_for_one_student_with_weak_topics(app, monkeypatch):
+    from src import retest
+    from src.generation_graph import GenerationResult
+    exam = Exam(title="รายบุคคล", spec_summary="", concepts=["A", "B"], questions=[
+        mcq(1).model_copy(update={"concept": "A"}), mcq(2).model_copy(update={"concept": "B"})])
+    add_room([RosterEntry(number="1", name="เอ"), RosterEntry(number="2", name="บี"), RosterEntry(number="3", name="ซี")])
+    start_class(app, exam)
+    first = app.session_state["class_sitting"]
+    rows = "เลขที่,ชื่อ,ข้อ 1,ข้อ 2\n1,เอ,ก,ข\n2,บี,ข,ก\n3,ซี,ก,ก\n"
+    import_and_grade(app, rows.encode("utf-8"))
+    app.number_input(key=f"class_pass_{first.id}").set_value(75.0).run()
+    captured = {}
+    def fake_retest(source, original, *, concepts, on_step=None):
+        captured["concepts"] = concepts
+        spec = retest.retest_spec(original, concepts)
+        questions = [q.model_copy(update={"concept": concepts[0], "question": f"ใหม่ {q.id}"}) for q in original.questions]
+        generated = original.model_copy(update={"questions": questions, "concepts": concepts, "title": spec.title})
+        return GenerationResult(exam=generated, spec=spec, quality=[], rounds=0, trace=[])
+    monkeypatch.setattr(retest, "make_retest", fake_retest)
+    person = app.selectbox(key=f"personal_retest_student_{first.id}")
+    assert not any("ซี" in o for o in person.options)  # ผ่านเกณฑ์แล้ว สอบซ่อมไปคะแนนก็ไม่เปลี่ยน
+    person.set_value("1").run()
+    app.button(key=f"personal_retest_{first.id}").click().run()
+    assert not app.exception, app.exception
+    assert captured["concepts"] == ["B"]
+    assert app.session_state["class_sitting"].takers == ("1",)
+    assert app.session_state["class_sitting"].retest_of == first.id

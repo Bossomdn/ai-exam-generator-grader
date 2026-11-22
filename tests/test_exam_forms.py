@@ -92,3 +92,14 @@ def test_csv_with_form_column_maps_back_to_the_original():
     assert students["เอ"].answers == students["บี"].answers == {1: 0, 2: 1, 3: 2}
     assert (students["เอ"].form, students["บี"].form, students["ซี"].form) == ("ก", "ข", "ก")
     assert any("ไม่ระบุชุด" in n for n in students["ซี"].import_notes)
+
+
+def test_choice_explanations_follow_shuffled_choices():
+    from src import exam_forms
+    from src.schemas import Exam, ExamForm
+    q = mcq(1, 0).model_copy(update={"choice_explanations": ["หนึ่ง", "สอง", "สาม", "สี่"]})
+    exam = Exam(title="ชุด", spec_summary="", concepts=[q.concept], questions=[q])
+    form = ExamForm(code="ข", order=[1], choices={1: [2, 0, 3, 1]})
+    shuffled = exam_forms.form_exam(exam, form).questions[0]
+    assert shuffled.choice_explanations == ["สาม", "หนึ่ง", "สี่", "สอง"]
+    assert shuffled.correct_choice == [2, 0, 3, 1].index(q.correct_choice)

@@ -33,6 +33,7 @@ DEFAULTS = {
     "class_images": {},  # ภาพกระดาษคำตอบ {sheet_name: [PNG]} (ไม่บันทึกลงฐานข้อมูล เพราะใหญ่)
     "class_exam_pdf": None,  # PDF ข้อสอบของห้องนี้สำหรับพิมพ์
     "item_report": None,  # ผลของ Item Analyst {"key", "report", "seconds"} (key บอกว่าวิเคราะห์จากข้อมูลชุดไหน)
+    "teaching_report": None,  # (key, TeachingReport) ความเข้าใจผิดที่เป็นไปได้และแนวทางสอนซ้ำ
     "item_revision": None,  # ข้อสอบฉบับปรับปรุงจากผลสอบจริง {"key", "result": GenerationResult, "source"}
     # หน้าห้องเรียน / คะแนน / สำรองข้อมูล
     "school_notice": None,  # (ข้อความสำเร็จ, [คำเตือน]) จากการเพิ่มห้อง / นำเข้ารายชื่อ / กู้คืน

@@ -60,6 +60,7 @@ class Question(BaseModel):
     choices: list[str] = Field(description="mcq: 4 ตัวเลือก, true_false: ['ถูก','ผิด'], อัตนัย: []")
     correct_choice: Optional[int] = Field(description="index ของตัวเลือกที่ถูก (เริ่มที่ 0) สำหรับปรนัย, อัตนัยเป็น null")
     explanation: str = Field(description="ทำไมคำตอบนี้ถูก และ (สำหรับ mcq) ทำไมตัวเลือกอื่นผิด")
+    choice_explanations: list[str] = Field(default_factory=list, description="คำอธิบายสั้น ๆ สำหรับแต่ละตัวเลือก เรียงตาม choices; อัตนัยเป็น []")
     model_answer: str = Field(description="คำตอบตัวอย่างสำหรับอัตนัย, ปรนัยเป็น ''")
     key_points: list[str] = Field(description="ประเด็นที่คำตอบต้องมี (short_answer), อื่น ๆ เป็น []")
     rubric: list[RubricCriterion] = Field(description="เกณฑ์ให้คะแนน (essay), อื่น ๆ เป็น []")
@@ -260,6 +261,17 @@ class RosterEntry(BaseModel):
 
 
 # ---------- วิเคราะห์ข้อสอบจากผลสอบจริง (ผลลัพธ์จาก Item Analyst) ----------
+
+class TeachingFinding(BaseModel):
+    question_id: int
+    choice: str = Field(description="ตัวเลือกผิดที่นักเรียนเลือกบ่อยตามข้อมูล")
+    misconception: str = Field(description="ความเข้าใจผิดที่อาจเป็นไปได้ ไม่ใช่ข้อสรุปยืนยัน")
+    teaching: str = Field(description="กิจกรรมหรือวิธีสอนซ้ำที่เจาะจง")
+
+
+class TeachingReport(BaseModel):
+    findings: list[TeachingFinding]
+
 
 class ItemDiagnosis(BaseModel):
     question_id: int

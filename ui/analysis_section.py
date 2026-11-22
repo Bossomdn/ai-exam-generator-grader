@@ -27,6 +27,7 @@ def render(ready: bool) -> None:
         st.info(f"ต้องตรวจคะแนนอย่างน้อย {item_analysis.MIN_STUDENTS} คนก่อน จึงจะวิเคราะห์ข้อสอบได้")
         return
     show_stats(stats)
+    teaching_section(exam, stats, ready)
     key = (state.class_sitting.id, scope, stats.n, stats.mean_percent, stats.sd)
     analyst_section(exam, stats, key, ready)
 
@@ -67,6 +68,31 @@ def show_stats(stats: ExamStats) -> None:
                 st.markdown(f"**ข้อ {item.question_id}**")
                 st.dataframe([{"ตัวเลือก": c.label + (" ✓ เฉลย" if c.is_key else ""), "ทั้งหมด": c.total,
                                "กลุ่มเก่ง": c.upper, "กลุ่มอ่อน": c.lower} for c in item.choices], hide_index=True)
+
+
+def teaching_section(exam: Exam, stats: ExamStats, ready: bool) -> None:
+    patterns = item_analyst.teaching_patterns(exam, stats)
+    if not patterns:
+        return
+    st.markdown("**ตัวเลือกผิดที่พบบ่อยและแนวทางสอนซ้ำ**")
+    st.dataframe([{"ข้อ": q.id, "หัวข้อ": q.concept, "ตัวเลือกผิด": c.label,
+                   "จำนวน": c.total, "ผู้สอบที่ตรวจแล้ว": stats.n} for q, c in patterns], hide_index=True)
+    st.caption("ตัวเลขแสดงการเลือกคำตอบ ไม่ยืนยันเหตุผลที่นักเรียนเลือก ครูควรตรวจเฉลยและสอบถามนักเรียน")
+    key = (state.class_sitting.id, exam.model_dump_json(), tuple((q.id, c.label, c.total) for q, c in patterns), stats.n)
+    if st.button("วิเคราะห์ความเข้าใจผิดและแนวทางสอนซ้ำ", disabled=not ready):
+        try:
+            with st.spinner("กำลังวิเคราะห์แนวทางสอน..."):
+                state.teaching_report = (key, item_analyst.analyze_teaching(exam, stats))
+        except LLMError as e:
+            st.error(str(e))
+    saved = state.teaching_report
+    if saved and saved[0] == key:
+        if not saved[1].findings:  # ทุกรายการที่ AI ตอบไม่ตรงข้อ/ตัวเลือกในตาราง ถูกกรองทิ้ง
+            st.info("AI ไม่ได้ตอบตรงกับข้อและตัวเลือกในตาราง ลองกดวิเคราะห์อีกครั้ง")
+        for finding in saved[1].findings:
+            st.markdown(f"**ข้อ {finding.question_id} · {finding.choice}**\n\n"
+                        f"ความเข้าใจผิดที่เป็นไปได้: {finding.misconception}\n\n"
+                        f"แนวทางสอน: {finding.teaching}")
 
 
 # ---------------- Item Analyst ----------------

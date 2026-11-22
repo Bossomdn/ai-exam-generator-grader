@@ -21,6 +21,7 @@ from . import analysis_section, nav
 from .answer_form import answer_fields, collect, prefill
 from .common import panel_text, show_panel, show_progress, state, use_exam
 from .create_tab import render_answer_key
+from .result_tab import show_question_details
 
 SHEETS = "สแกนกระดาษคำตอบ (PDF / รูปถ่าย)"
 CSV = "ไฟล์ CSV (กรอกคำตอบเอง)"
@@ -575,10 +576,8 @@ def show_student(exam: Exam, student: StudentRecord) -> None:
             "คณะผู้ตรวจ": panel_text(r) if r else "",
         })
     st.dataframe(rows, hide_index=True)
-    for r in student.results or []:
-        if r.panel:
-            st.markdown(f"**ข้อ {r.question_id} (เรียงความ)**")
-            show_panel(r)
+    if student.results:
+        show_question_details(exam, student.results, teacher=True)  # รวมผลคณะผู้ตรวจของข้อเรียงความ
 
 
 def teacher_review_section() -> None:
@@ -683,6 +682,31 @@ def retest_section(ready: bool) -> None:
             state.notice = f"สร้างการสอบซ่อม “{result.exam.title}” แล้ว ({len(takers)} คน) พิมพ์ข้อสอบได้ที่ขั้นที่ 1"
             open_sitting(retest_id)
     st.caption("ข้อสอบชุดซ่อมวัดหัวข้อ ชนิด จำนวนข้อ คะแนน และความยากเท่าครั้งแรก แต่ใช้คำถามใหม่")
+    st.markdown("**สอบซ่อมเฉพาะบุคคลตามหัวข้อที่อ่อน**")
+    person_key = st.selectbox(f"เลือกผู้สอบซ่อมรายคน (ต่ำกว่าเกณฑ์ {len(below)} คน)", [s.key for s in below],
+                              format_func=lambda k: f"{graded[k].student_no} {graded[k].name}",
+                              key=f"personal_retest_student_{sitting.id}")
+    person = graded[person_key]
+    concepts = retest.weak_concepts(person, pass_percent)
+    pending = any(r.needs_teacher_review for r in person.results or [])
+    st.caption("หัวข้อที่คะแนนต่ำกว่าเกณฑ์: " + (", ".join(concepts) if concepts else "ไม่มี"))
+    st.caption("ชุดนี้วัดเฉพาะหัวข้อที่อ่อน คะแนนหลังซ่อมยังใช้กติกาเดิม ครูควรตรวจความเหมาะสมก่อนใช้")
+    if pending:
+        st.warning("ต้องให้ครูตัดสินคะแนนที่รอตรวจของนักเรียนคนนี้ก่อนสร้างชุดเฉพาะบุคคล")
+    if st.button("ออกข้อสอบซ่อมเฉพาะบุคคล", disabled=not ready or not concepts or pending,
+                 key=f"personal_retest_{sitting.id}"):
+        exam = session.exam
+        source = state.source if state.exam == exam and state.source else sources.from_topic(
+            f"{exam.title}: {', '.join(exam.concepts)}")
+        result = show_progress(
+            "กำลังออกข้อสอบเฉพาะหัวข้อที่อ่อน", "ออกข้อสอบซ่อมเฉพาะบุคคล",
+            lambda on_step: retest.make_retest(source, exam, concepts=concepts, on_step=on_step),
+        )
+        if result:
+            with school_db.connect() as conn:
+                retest_id = school_db.open_retest(conn, result.exam, sitting.id, [person_key])
+            state.notice = f"สร้างข้อสอบซ่อมเฉพาะบุคคลสำหรับ {person.name} แล้ว"
+            open_sitting(retest_id)
 
 
 def after_retest_section() -> None:

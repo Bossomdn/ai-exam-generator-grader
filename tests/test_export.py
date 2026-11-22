@@ -90,3 +90,13 @@ def test_html_to_pdf_produces_pdf():
     except export.ExportError as e:
         pytest.skip(f"ไม่มีเบราว์เซอร์สำหรับสร้าง PDF: {e}")
     assert pdf.startswith(b"%PDF")
+
+
+def test_report_shows_selected_choice_explanation_without_leaking_into_exam():
+    exam = make_exam()
+    q = exam.questions[0].model_copy(update={"choice_explanations": ["เหตุผล ก", "เหตุผล ข", "เหตุผล ค", "เหตุผล ง"]})
+    exam = exam.model_copy(update={"questions": [q]})
+    results = [scoring.grade_objective(q, 1)]
+    html = export.report_html(exam, results, scoring.concept_mastery(results), None)
+    assert "เหตุผล ข" in html and "เหตุผล ก" not in html
+    assert "เหตุผล ข" not in export.exam_html(exam)

@@ -11,6 +11,7 @@ from typing import Callable, Optional
 
 from . import planner, scoring
 from .generation_graph import GenerationResult, run_generation, run_revision
+from .llm import LLMError
 from .schemas import AgentStep, ClassSession, Exam, StudentRecord
 from .sources import Source
 
@@ -45,23 +46,38 @@ def duplicates(original: Exam, retest: Exam) -> dict[int, int]:
     return found
 
 
-def retest_spec(exam: Exam):
+def weak_concepts(student: StudentRecord, pass_percent: float) -> list[str]:
+    """หัวข้อที่คะแนนต่ำกว่าเกณฑ์จากผลที่ตรวจแล้ว"""
+    return [m.concept for m in scoring.concept_mastery(student.results or [])
+            if m.max_points > 0 and m.percent < pass_percent]
+
+
+def retest_spec(exam: Exam, concepts: Optional[list[str]] = None):
     """สเปกของข้อสอบครั้งแรก + คำสั่งให้เป็นข้อสอบคู่ขนานที่ไม่ใช้คำถามเดิม"""
     spec = planner.spec_from_exam(exam)
     stems = "\n".join(f"- {q.question[:100]}" for q in exam.questions)
+    if concepts is None:
+        target = "วัดหัวข้อเดิม ชนิด จำนวนข้อ คะแนน และระดับความยากเท่าข้อสอบครั้งแรก"
+    else:  # ชุดเฉพาะบุคคล
+        target = (f"ชุดเฉพาะบุคคล วัดเฉพาะหัวข้อ {', '.join(concepts)} กระจายข้อให้ครอบคลุมหัวข้อเหล่านี้ "
+                  "โดยชนิด จำนวนข้อ คะแนน และระดับความยากเท่าข้อสอบครั้งแรก")
     focus = (
-        f"{spec.focus}\n\nข้อสอบชุดสอบซ่อม (ข้อสอบคู่ขนาน): วัดหัวข้อเดิม ชนิด จำนวนข้อ คะแนน และระดับความยากเท่าข้อสอบครั้งแรก "
+        f"{spec.focus}\n\nข้อสอบชุดสอบซ่อม (ข้อสอบคู่ขนาน): {target} "
         "แต่ห้ามใช้คำถาม ตัวอย่าง ตัวเลข หรือสถานการณ์เดิม คำถามในข้อสอบครั้งแรก:\n" + stems
     ).strip()
-    return spec.model_copy(update={"title": exam.title + TITLE_SUFFIX, "focus": focus})
+    return spec.model_copy(update={"title": exam.title + TITLE_SUFFIX, "focus": focus,
+                                   "concepts": concepts if concepts is not None else spec.concepts})
 
 
 def make_retest(
-    source: Source, exam: Exam, *, on_step: Optional[Callable[[AgentStep], None]] = None
+    source: Source, exam: Exam, *, concepts: Optional[list[str]] = None,
+    on_step: Optional[Callable[[AgentStep], None]] = None
 ) -> GenerationResult:
     """ออกข้อสอบชุดซ่อมผ่านกราฟสร้างข้อสอบ แล้วส่งข้อที่ซ้ำกับข้อเดิมกลับไปแก้ (เรียก LLM อาจโยน LLMError)"""
-    spec = retest_spec(exam)
+    spec = retest_spec(exam, concepts)
     result = run_generation(source, spec=spec, on_step=on_step)
+    if concepts is not None and any(q.concept not in concepts for q in result.exam.questions):
+        raise LLMError("ข้อสอบซ่อมมีหัวข้อนอกเหนือจากจุดอ่อนที่เลือก กรุณาสร้างใหม่")
     same = duplicates(exam, result.exam)
     if not same:
         return result
@@ -71,8 +87,11 @@ def make_retest(
                      summary=f"ข้อ {', '.join(map(str, same))} ซ้ำกับข้อสอบครั้งแรก ส่งกลับให้ Generator เขียนใหม่")
     if on_step:
         on_step(step)
-    return run_revision(source, spec, result.exam, issues, suggestions, prior_steps=result.trace + [step],
-                        on_step=on_step)
+    revised = run_revision(source, spec, result.exam, issues, suggestions, prior_steps=result.trace + [step],
+                           on_step=on_step)
+    if concepts is not None and any(q.concept not in concepts for q in revised.exam.questions):
+        raise LLMError("ข้อสอบซ่อมมีหัวข้อนอกเหนือจากจุดอ่อนที่เลือก กรุณาสร้างใหม่")
+    return revised
 
 
 def summary(original: ClassSession, retests: list[ClassSession], pass_percent: float) -> list[dict]:
