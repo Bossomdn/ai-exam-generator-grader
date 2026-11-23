@@ -161,16 +161,24 @@ def ready_to_grade(session: ClassSession) -> list[int]:
 
 # ---------------- ตรวจและสรุปคะแนน ----------------
 
-def needs_llm(exam: Exam) -> bool:
-    """ข้อสอบมีอัตนัยไหม (ปรนัยล้วนตรวจด้วยโค้ดได้ ไม่ต้องใช้โมเดล)"""
-    return any(q.type not in OBJECTIVE_TYPES for q in exam.questions)
+def needs_llm(exam: Exam, students: list[StudentRecord] | None = None) -> bool:
+    """ต้องใช้โมเดลไหม: ปรนัย ข้อที่ไม่ได้ตอบ และเรียงความที่ครูกรอกคะแนนมาแล้ว ตรวจด้วยโค้ดได้
+    ไม่ระบุ students = ดูจากข้อสอบอย่างเดียว (มีอัตนัยเมื่อไหร่ถือว่าต้องใช้)"""
+    subjective = [q.id for q in exam.questions if q.type not in OBJECTIVE_TYPES]
+    if students is None:
+        return bool(subjective)
+    return any(
+        qid not in s.teacher_scores and str(s.answers.get(qid) or "").strip()
+        for s in students for qid in subjective
+    )
 
 
 def grade_student(
     exam: Exam, student: StudentRecord, *, guidance: dict[int, tuple[str, ...]] | None = None
 ) -> StudentRecord:
-    """ปรนัยตรวจด้วยโค้ด อัตนัยตรวจด้วย grader (เรียก LLM) — อาจโยน LLMError"""
-    results = grade_exam(exam, student.answers, guidance=guidance, review_with_teacher=True)
+    """ปรนัยตรวจด้วยโค้ด อัตนัยตรวจด้วย grader (เรียก LLM) ยกเว้นเรียงความที่ครูกรอกคะแนนมา — อาจโยน LLMError"""
+    results = grade_exam(exam, student.answers, guidance=guidance, review_with_teacher=True,
+                         teacher_scores=student.teacher_scores)
     return student.model_copy(update={"results": results})
 
 

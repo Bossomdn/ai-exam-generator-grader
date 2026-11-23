@@ -356,6 +356,7 @@ def csv_upload() -> None:
         "⬇️ เทมเพลต CSV", csv_import.template_csv(exam, forms), file_name="answers_template.csv", mime="text/csv",
     )
     st.caption("กรอกเทมเพลต: ปรนัยใส่ ก ข ค ง หรือข้อความตัวเลือก · ถูก/ผิด ใส่ “ถูก” หรือ “ผิด” · อัตนัยใส่ข้อความคำตอบ"
+               " · เรียงความที่ตรวจบนกระดาษแล้วใส่แค่ตัวเลขคะแนน (ไม่ต้องใช้ AI ตรวจข้อนั้น)"
                + (" · คอลัมน์ “ชุด” ใส่ชุดที่คนนั้นสอบ แล้วกรอกเลขข้อและตัวเลือกตามที่พิมพ์ในชุดนั้น" if forms else ""))
     if st.button("นำเข้าคำตอบ", type="primary", disabled=uploaded is None):
         try:
@@ -494,11 +495,16 @@ def grade_section(ready: bool) -> None:
         state.class_graded = None
     pending = class_session.ready_to_grade(session)
     waiting = class_session.awaiting_review(session)
-    needs_llm = class_session.needs_llm(session.exam)
+    needs_llm = class_session.needs_llm(session.exam, [session.students[i] for i in pending])
     if pending:
         if st.button(f"ตรวจคำตอบที่ยังไม่ได้ตรวจ ({len(pending)} คน)", type="primary", disabled=needs_llm and not ready):
             grade_all(pending)
-        st.caption(grading_note(session.exam) if needs_llm else "ข้อสอบปรนัยล้วน ตรวจด้วยโค้ดทันที ไม่ต้องใช้โมเดล")
+        if needs_llm:
+            st.caption(grading_note(session.exam))
+        elif class_session.needs_llm(session.exam):
+            st.caption("ไม่มีข้อที่ต้องใช้โมเดล ปรนัยตรวจด้วยโค้ด เรียงความใช้คะแนนที่ครูกรอก ตรวจได้ทันที")
+        else:
+            st.caption("ข้อสอบปรนัยล้วน ตรวจด้วยโค้ดทันที ไม่ต้องใช้โมเดล")
     if waiting:
         st.caption(f"ยังมี {len(waiting)} คนรอตรวจทาน — ต้องตรวจทานในขั้นที่ 3 ก่อนจึงจะตรวจคะแนนได้")
 

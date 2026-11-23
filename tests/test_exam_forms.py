@@ -94,6 +94,19 @@ def test_csv_with_form_column_maps_back_to_the_original():
     assert any("ไม่ระบุชุด" in n for n in students["ซี"].import_notes)
 
 
+def test_csv_teacher_scores_follow_shuffled_essay_order():
+    second = ESSAY.model_copy(update={"id": 8, "concept": "c8", "points": 10})
+    exam = Exam(title="สองเรียงความ", spec_summary="", concepts=[], questions=[mcq(1, 0), ESSAY, second])
+    forms = exam_forms.make_forms(exam, 2, seed=1)
+    printed = exam_forms.form_exam(exam, forms[1])
+    scores = {7: "4", 8: "9"}  # ข้อต้นฉบับ → คะแนน
+    cells = [scores.get(base, "ก") for base in forms[1].order]
+    assert forms[1].order[1:] == [8, 7] and [q.points for q in printed.questions[1:]] == [10, 5]  # ชุด ข สลับเรียงความ
+    data = csv_import.template_csv(exam, forms).decode("utf-8-sig") + "1,เอ,ข," + ",".join(cells) + "\n"
+    student = csv_import.parse_responses(exam, data.encode("utf-8"), forms).students[0]
+    assert student.teacher_scores == {7: 4.0, 8: 9.0} and not student.import_notes
+
+
 def test_choice_explanations_follow_shuffled_choices():
     from src import exam_forms
     from src.schemas import Exam, ExamForm
