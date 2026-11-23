@@ -39,6 +39,15 @@ def test_filled_template_with_letters_text_and_true_false():
     assert all(s.source == "csv" and s.reviewed and not s.import_notes for s in result.students)
 
 
+def test_essay_number_is_teacher_score_but_short_answer_number_stays_text():
+    short = ESSAY.model_copy(update={"id": 4, "type": "short_answer", "points": 2, "rubric": []})
+    exam = EXAM.model_copy(update={"questions": [MCQ, TF, ESSAY, short]})
+    text = to_csv(HEADER + ["ข้อ 4"], [["1", "เอ", "ก", "ผิด", "7.5", "42"], ["2", "บี", "ก", "ผิด", "12", "42"]])
+    a, b = csv_import.parse_responses(exam, text.encode("utf-8")).students
+    assert a.teacher_scores == {3: 7.5} and a.answers[3] == "" and a.answers[4] == "42" and not a.import_notes
+    assert b.teacher_scores == {} and b.answers[3] == "" and "เกินคะแนนเต็ม 10" in b.import_notes[0]
+
+
 def test_extra_columns_ignored_and_duplicate_rows_use_last():
     text = to_csv(["Timestamp"] + HEADER + ["หมายเหตุ"], [
         ["t1", "1", "สมชาย", "Supervised", "ผิด", "ตอบครั้งแรก", "x"],

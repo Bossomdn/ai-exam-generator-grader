@@ -113,15 +113,17 @@ def grade_answer(
 
 def grade_exam(
     exam: Exam, answers: dict[int, Answer], *, guidance: dict[int, tuple[str, ...]] | None = None,
-    review_with_teacher: bool = False,
+    review_with_teacher: bool = False, teacher_scores: dict[int, float] | None = None,
 ) -> list[QuestionResult]:
-    """ตรวจทั้งชุด: ปรนัยด้วยโค้ด อัตนัยหลายข้อพร้อมกัน"""
+    """ตรวจทั้งชุด: ปรนัยด้วยโค้ด อัตนัยหลายข้อพร้อมกัน ข้อที่ครูกรอกคะแนนมาแล้ว (teacher_scores) ใช้คะแนนนั้น"""
     results = []
     subjective = []
     for q in exam.questions:
         if q.type in OBJECTIVE_TYPES:
             answer: Optional[int] = answers.get(q.id)  # type: ignore[assignment]
             results.append(scoring.grade_objective(q, answer))
+        elif teacher_scores and q.id in teacher_scores:
+            results.append(scoring.teacher_scored_result(q, teacher_scores[q.id]))
         else:
             subjective.append(q)
     with ThreadPoolExecutor(max_workers=config.GRADING_WORKERS) as pool:

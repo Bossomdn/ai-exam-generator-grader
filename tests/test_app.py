@@ -239,6 +239,34 @@ def test_class_tab_imports_and_grades_whole_class(app):
     assert [s.name for s in at.session_state["class_session"].students if s.results] == ["นายเอ", "นางบี"]
 
 
+def test_class_tab_grades_teacher_scored_essays_without_the_model(app, monkeypatch):
+    at = app
+    exam = Exam(title="ชุดครูตรวจเรียงความ", spec_summary="", concepts=["Supervised", "Overfitting"],
+                questions=[mcq(1), mcq(2), ESSAY])
+    add_room()
+    start_class(at, exam)
+    monkeypatch.setattr(src.llm, "check_ready", lambda: (False, "ออฟไลน์ (จำลอง)"))
+
+    def no_llm(**_):
+        raise AssertionError("ไม่ควรเรียกโมเดล")
+    monkeypatch.setattr(src.grader, "call_structured", no_llm)
+    filled = csv_import.template_csv(exam).decode("utf-8-sig") + "1,นายเอ,ก,ค1,1\n2,นางบี,,ข,0.5\n"
+    imported = csv_import.parse_responses(exam, filled.encode("utf-8"))
+    at.session_state["class_session"] = class_session.merge_students(
+        at.session_state["class_session"], imported.students)[0]
+    at.run()
+    assert not at.exception, at.exception
+    assert not [b for b in at.button if b.label == "ตรวจคำตอบที่ยังไม่ได้ตรวจ (2 คน)"][0].disabled
+    assert any("ใช้คะแนนที่ครูกรอก" in c.value for c in at.caption)
+
+    click(at, "ตรวจคำตอบที่ยังไม่ได้ตรวจ (2 คน)")
+    rows = class_session.score_rows(at.session_state["class_session"])
+    assert [(r["ชื่อ"], r["คะแนนรวม"], r["ข้อ 3"]) for r in rows] == [("นายเอ", 2, 1), ("นางบี", 0.5, 0.5)]
+    [s for s in at.selectbox if s.label == "ดูรายละเอียดรายคน"][0].select(0).run()
+    assert not at.exception, at.exception
+    assert any("ครูตรวจบนกระดาษคำตอบ" in m.value for m in at.markdown)
+
+
 def test_class_tab_requires_review_of_scanned_sheets_before_grading(app):
     at = app
     exam = Exam(title="ชุดกระดาษ", spec_summary="", concepts=["Supervised", "Overfitting"],

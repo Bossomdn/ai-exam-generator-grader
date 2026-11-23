@@ -233,6 +233,7 @@ class StudentRecord(BaseModel):
     student_no: str = ""  # เลขที่ / รหัสผู้สอบ (ถ้ามี)
     name: str
     answers: dict[int, Union[int, str, None]]  # ปรนัย = index ตัวเลือก, อัตนัย = ข้อความ, ไม่ได้ตอบ = None
+    teacher_scores: dict[int, float] = {}  # เรียงความที่ครูตรวจบนกระดาษเองแล้วกรอกคะแนนใน CSV (ไม่ส่งให้ AI ตรวจ)
     source: Literal["csv", "answer_sheet"]
     import_notes: list[str] = []  # คำเตือนตอนนำเข้า เช่น จับคู่ตัวเลือกไม่ได้ / AI อ่านไม่ชัด
     reviewed: bool = True  # คำตอบที่ AI อ่านจากกระดาษต้องให้ครูตรวจทานก่อนตรวจคะแนน

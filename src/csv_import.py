@@ -6,6 +6,8 @@
 
 จับคู่คอลัมน์กับข้อสอบด้วยหัวคอลัมน์ที่ขึ้นต้นด้วย "ข้อ n" (คอลัมน์อื่นที่ไม่รู้จักจะถูกข้าม)
 ปรนัยจับคู่ด้วยข้อความตัวเลือก ตัวอักษร (ก ข ค ง / A B C D) หรือ ถูก/ผิด
+เรียงความ: ใส่ข้อความคำตอบ (AI ตรวจ) หรือใส่เฉพาะตัวเลขคะแนนที่ครูตรวจบนกระดาษแล้ว (ไม่ส่งให้ AI)
+  ตอบสั้นเก็บเป็นข้อความเสมอ เพราะคำตอบที่เป็นตัวเลขอาจเป็นคำตอบจริง
 มีชุดสลับ: กรอกเลขข้อและตัวเลือกตามที่พิมพ์ในชุดของคนนั้น (คอลัมน์ "ชุด") ระบบแปลงกลับเป็นข้อสอบต้นฉบับเอง
 """
 
@@ -23,6 +25,7 @@ from .schemas import OBJECTIVE_TYPES, Exam, ExamForm, Question, RosterEntry, Stu
 NAME_TITLE = "ชื่อ-นามสกุล"
 FORM_TITLE = "ชุด"
 QUESTION_HEADER = re.compile(r"^\s*ข้อ\s*(\d+)")
+SCORE = re.compile(r"^\d+(?:\.\d+)?$")  # ช่องเรียงความที่มีแต่ตัวเลข = คะแนนที่ครูตรวจเอง
 
 
 class CsvImportError(ValueError):
@@ -140,9 +143,16 @@ def parse_responses(exam: Exam, data: bytes, forms: list[ExamForm] = ()) -> Impo
                 form = forms[0]
         questions = {q.id: q for q in (exam_forms.form_exam(exam, form) if form else exam).questions}
         answers: dict[int, Union[int, str, None]] = {}
+        scores: dict[int, float] = {}
         for qid, col in columns.items():
             raw, q = _cell(row, col), questions[qid]
-            if q.type not in OBJECTIVE_TYPES:
+            if q.type == "essay" and SCORE.match(raw):
+                answers[qid] = ""
+                if float(raw) <= q.points:
+                    scores[qid] = float(raw)
+                else:
+                    notes.append(f"ข้อ {qid}: คะแนน {raw} เกินคะแนนเต็ม {q.points:g} — นับเป็นไม่ได้ตอบ แก้ไฟล์แล้วนำเข้าใหม่")
+            elif q.type not in OBJECTIVE_TYPES:
                 answers[qid] = raw
             elif not raw:
                 answers[qid] = None
@@ -158,6 +168,7 @@ def parse_responses(exam: Exam, data: bytes, forms: list[ExamForm] = ()) -> Impo
         student = StudentRecord(
             student_no=normalize_no(_cell(row, id_col)), name=name, source="csv", import_notes=notes,
             answers=exam_forms.to_base(form, answers) if form else answers, form=form.code if form else "",
+            teacher_scores=exam_forms.to_base(form, scores) if form else scores,
         )
         if student.key in by_key:
             warnings.append(f"{name} มีมากกว่า 1 แถว — ใช้แถวล่างสุด")

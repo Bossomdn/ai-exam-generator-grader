@@ -97,6 +97,19 @@ def test_objective_only_exam_needs_no_llm():
     assert [r.points_awarded for r in graded.results] == [1, 0]
 
 
+def test_teacher_scored_essay_skips_the_model(monkeypatch):
+    def no_llm(**_):
+        raise AssertionError("ไม่ควรเรียกโมเดล")
+    monkeypatch.setattr(grader, "call_structured", no_llm)
+    scored = student("ดี", {1: 0, 2: 1, 3: ""}).model_copy(update={"teacher_scores": {3: 7.5}})
+    blank = student("อี", {1: 1, 2: 0, 3: ""})
+    assert not class_session.needs_llm(EXAM, [scored, blank])  # เรียงความว่างก็ไม่ต้องใช้โมเดล
+    assert class_session.needs_llm(EXAM, [scored, student("เอฟ", {3: "คำตอบ"})])
+    results = class_session.grade_student(EXAM, scored).results
+    assert [r.points_awarded for r in results] == [1, 1, 7.5]
+    assert results[2].criteria == [] and results[2].panel is None and not results[2].needs_teacher_review
+
+
 def test_read_sheet_calls_reader_and_notes_truncation(monkeypatch):
     monkeypatch.setattr(answer_reader, "read_answers", lambda exam, s: sheet(name="ดี"))
     file = answer_reader.AnswerSheetFile(name="big.pdf", pages=10, images=[b"x"], truncated=True)

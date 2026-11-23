@@ -72,6 +72,20 @@ def unanswered_result(question: Question) -> QuestionResult:
     )
 
 
+def teacher_scored_result(question: Question, points: float) -> QuestionResult:
+    """เรียงความที่ครูตรวจบนกระดาษเองแล้วกรอกคะแนนมา (ไม่มีข้อความคำตอบ จึงไม่มีผลรายเกณฑ์)"""
+    return QuestionResult(
+        question_id=question.id,
+        type=question.type,
+        concept=question.concept,
+        source_ref=question.source_ref,
+        points_awarded=min(max(points, 0.0), question.points),
+        max_points=question.points,
+        student_answer="(ครูตรวจบนกระดาษคำตอบ)",
+        feedback="คะแนนที่ครูตรวจบนกระดาษคำตอบและกรอกในไฟล์ CSV",
+    )
+
+
 def _match_criterion(returned: str, index: int, known: list[tuple[str, str, float]]) -> Optional[tuple[str, float]]:
     """จับคู่ชื่อเกณฑ์ที่ grader ตอบกลับกับเกณฑ์จริง (โมเดลบางตัวเติมข้อความต่อท้ายชื่อ)"""
     for name, _, max_pts in known:
